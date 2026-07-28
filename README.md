@@ -47,9 +47,10 @@ rather than committed.
 
 It runs out of the box. The House builds itself from the layout in
 `HouseData.luau` — four floors, real room bounds, the designed hiding spots and
-patrol routes. Characters are still placeholder rigs. When you build a map by
-hand instead, drop it into `ServerStorage/Maps/TheHouse` and the generated one
-gets skipped; nothing in the gameplay code changes.
+patrol routes, and the cast from `CharacterBuilder.luau`. When you build a map
+by hand instead, drop it into `ServerStorage/Maps/TheHouse` and the generated one
+gets skipped; a rig in `ServerStorage/Killers/<Name>` likewise wins over the
+generated one. Nothing in the gameplay code changes either way.
 
 ---
 
@@ -85,9 +86,11 @@ gets skipped; nothing in the gameplay code changes.
    an id, that sound starts playing. The per-killer approach loops are the single
    highest-value audio in the game — they're how a player works out *which* thing
    is hunting them, and therefore whether to run or hold still.
-2. **The map.** The greybox is a real, playable two-storey house, but it is grey
-   boxes. See [docs/MAP_BUILDING.md](docs/MAP_BUILDING.md) — you tag parts in
-   Studio and the code finds them. You never edit a script to add a hiding spot.
+2. **Art passes.** The House and the cast are built from your mockups at
+   silhouette level — right proportions, right palette, right signature details,
+   but simple geometry. Refining them means editing numbers in `HouseData.luau`
+   and `CharacterBuilder.Specs`, or replacing either wholesale via
+   `ServerStorage`. See [docs/MAP_BUILDING.md](docs/MAP_BUILDING.md).
 
 ---
 
@@ -136,7 +139,7 @@ src/
     init.server.luau          bootstrap and start order
     Services/                 one file per system
     AI/KillerAgent.luau       the killer state machine
-    Build/                    greybox map and placeholder rig generators
+    Build/                    the House, the cast, and the primitives they share
   client/                     -> StarterPlayer.StarterPlayerScripts
     init.client.luau
     Controllers/              HUD, alerts, vote, results, modals, input, audio, spectate
