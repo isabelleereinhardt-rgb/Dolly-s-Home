@@ -16,21 +16,42 @@ conversation between you and the thing in the next room.
 
 ---
 
-## Start here
+## Start here — no tools required
+
+Three files in **[`build/`](build)**. In Studio, right-click a service in the
+Explorer, pick **Insert from File…**, choose the matching file:
+
+| File | Goes into |
+|---|---|
+| `DollysHome_ReplicatedStorage.rbxmx` | ReplicatedStorage |
+| `DollysHome_ServerScriptService.rbxmx` | ServerScriptService |
+| `DollysHome_StarterPlayerScripts.rbxmx` | StarterPlayer → StarterPlayerScripts |
+
+Press Play. That's the whole install.
+
+Step by step, including what the Explorer should look like afterwards:
+**[docs/INSTALL_NO_ROJO.md](docs/INSTALL_NO_ROJO.md)**
+
+<details>
+<summary>Prefer Rojo? (live sync while you edit)</summary>
 
 ```bash
 rokit install          # or: aftman install
-rojo serve             # then connect from the Rojo plugin in Studio and press Play
+rojo serve             # then connect from the Rojo plugin in Studio
 ```
 
-Full walkthrough, including what to do if you've never used Rojo:
-**[docs/SETUP.md](docs/SETUP.md)**
+Full walkthrough: **[docs/SETUP.md](docs/SETUP.md)**. Rojo's advantage is that
+saving a file updates Studio instantly; the `.rbxmx` route means re-importing
+when the code changes. Both produce exactly the same hierarchy.
 
-It runs out of the box. There is no art yet, so the game generates a greybox
-house and blocky placeholder killers on first run — every system (AI, noise,
-objectives, revives, stakes, scoring) is testable immediately. When you build the
-real map, you drop it into `ServerStorage/Maps/TheHouse` and the generated one
-gets skipped. Nothing in the gameplay code changes.
+Regenerate the bundles after a code change with `python3 tools/build_rbxmx.py`.
+</details>
+
+It runs out of the box. The House builds itself from the layout in
+`HouseData.luau` — four floors, real room bounds, the designed hiding spots and
+patrol routes. Characters are still placeholder rigs. When you build a map by
+hand instead, drop it into `ServerStorage/Maps/TheHouse` and the generated one
+gets skipped; nothing in the gameplay code changes.
 
 ---
 

@@ -1,0 +1,3303 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Item class="LocalScript" referent="RBX49">
+		<Properties>
+			<string name="Name">DollysHomeClient</string>
+			<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	init.client.luau
+	--------------------------------------------------------------------------
+	Client bootstrap.
+
+	Requiring Shared.Net blocks until the server has built the DollysHome
+	folder, so every controller below can assume the remotes and the state
+	container already exist.
+
+	Controllers are started in a pcall each: a broken HUD should not take the
+	input handler down with it.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+require(Shared.Net) -- waits for the server's remote folder
+
+local Controllers = script.Controllers
+
+local AlertController = require(Controllers.AlertController)
+local AudioController = require(Controllers.AudioController)
+local HudController = require(Controllers.HudController)
+local InputController = require(Controllers.InputController)
+local ModalController = require(Controllers.ModalController)
+local ResultsController = require(Controllers.ResultsController)
+local SpectateController = require(Controllers.SpectateController)
+local VoteController = require(Controllers.VoteController)
+
+local player = Players.LocalPlayer
+player:WaitForChild("PlayerGui")
+
+local START_ORDER: { { Name: string, Start: () -> () } } = {
+	{ Name = "HudController", Start = HudController.start },
+	{ Name = "AlertController", Start = AlertController.start },
+	{ Name = "VoteController", Start = VoteController.start },
+	{ Name = "ResultsController", Start = ResultsController.start },
+	{ Name = "ModalController", Start = ModalController.start },
+	{ Name = "InputController", Start = InputController.start },
+	{ Name = "AudioController", Start = AudioController.start },
+	{ Name = "SpectateController", Start = SpectateController.start },
+}
+
+for _, entry in START_ORDER do
+	local ok, err = pcall(entry.Start)
+	if not ok then
+		warn(`[DollysHome] {entry.Name} failed to start: {err}`)
+	end
+end
+
+print("[DollysHome] client ready.")
+]]></ProtectedString>
+		</Properties>
+		<Item class="Folder" referent="RBX45">
+			<Properties>
+				<string name="Name">Controllers</string>
+			</Properties>
+			<Item class="ModuleScript" referent="RBX37">
+				<Properties>
+					<string name="Name">AlertController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	AlertController.luau
+	--------------------------------------------------------------------------
+	Everything transient: task-completion toasts, downed-teammate alerts with a
+	direction arrow, and the killers' muttering.
+
+	The injured alert is the important one. The design document asks for an
+	on-screen indicator of a downed player's location so nearby teammates can
+	respond, and getting that readable matters more than anything else here --
+	a rescue that arrives at twenty-nine seconds is the best moment the game
+	has.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Net = require(Shared.Net)
+local StateKeys = require(Shared.StateKeys)
+local Util = require(Shared.Util)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+local Widgets = require(script.Parent.Parent.UI.Widgets)
+
+local player = Players.LocalPlayer
+
+local AlertController = {}
+
+local gui: ScreenGui
+local toastList: Frame
+local subtitle: TextLabel
+
+type InjuredEntry = {
+	UserId: number,
+	Name: string,
+	ExpiresAt: number,
+	Frame: Frame,
+	NameLabel: TextLabel,
+	ArrowLabel: TextLabel,
+	TimeLabel: TextLabel,
+}
+
+local injured: { [number]: InjuredEntry } = {}
+local injuredList: Frame
+
+--==========================================================================
+-- Toasts
+--==========================================================================
+
+local TOAST_STYLE: { [string]: { Colour: Color3, Icon: string } } = {
+	Task = { Colour = Theme.Colour.MossBright, Icon = "✓" },
+	Objective = { Colour = Theme.Colour.Gold, Icon = "!" },
+	Danger = { Colour = Theme.Colour.CrimsonBright, Icon = "!" },
+	Helper = { Colour = Theme.Colour.Ghost, Icon = "~" },
+	Combat = { Colour = Theme.Colour.Bone, Icon = "×" },
+	Stake = { Colour = Theme.Colour.CrimsonBright, Icon = "×" },
+	Info = { Colour = Theme.Colour.Text, Icon = "·" },
+	Error = { Colour = Theme.Colour.Crimson, Icon = "×" },
+	Success = { Colour = Theme.Colour.MossBright, Icon = "✓" },
+}
+
+function AlertController.toast(text: string, kind: string?, duration: number?)
+	if text == "" then
+		return
+	end
+
+	local style = TOAST_STYLE[kind or "Info"] or TOAST_STYLE.Info
+
+	local frame = Widgets.panel({
+		Size = UDim2.new(0, 400, 0, 34),
+		BackgroundTransparency = 0.15,
+		LayoutOrder = -math.floor(os.clock() * 1000),
+		Parent = toastList,
+	})
+	Widgets.padding(Theme.Padding.Tight, { Left = 10, Right = 10 }).Parent = frame
+
+	local label = Widgets.label(`{style.Icon}   {text}`, {
+		Size = UDim2.fromScale(1, 1),
+		TextColor3 = style.Colour,
+		TextSize = Theme.TextSize.Small,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = frame,
+	})
+
+	frame.BackgroundTransparency = 1
+	label.TextTransparency = 1
+	TweenService:Create(frame, Theme.Tween.Fast, { BackgroundTransparency = 0.15 }):Play()
+	TweenService:Create(label, Theme.Tween.Fast, { TextTransparency = 0 }):Play()
+
+	task.delay(duration or 4, function()
+		if not frame.Parent then
+			return
+		end
+		TweenService:Create(frame, Theme.Tween.Normal, { BackgroundTransparency = 1 }):Play()
+		TweenService:Create(label, Theme.Tween.Normal, { TextTransparency = 1 }):Play()
+		task.wait(0.3)
+		frame:Destroy()
+	end)
+end
+
+--==========================================================================
+-- Subtitles (killer and helper dialogue)
+--==========================================================================
+
+local subtitleToken = 0
+
+function AlertController.subtitle(speaker: string, text: string, colour: Color3, duration: number?)
+	subtitleToken += 1
+	local token = subtitleToken
+
+	subtitle.Text = `{speaker}:  "{text}"`
+	subtitle.TextColor3 = colour
+	TweenService:Create(subtitle, Theme.Tween.Fast, { TextTransparency = 0 }):Play()
+
+	task.delay(duration or 5, function()
+		if subtitleToken == token then
+			TweenService:Create(subtitle, Theme.Tween.Normal, { TextTransparency = 1 }):Play()
+		end
+	end)
+end
+
+--==========================================================================
+-- Injured alerts
+--==========================================================================
+
+local function addInjured(payload: any)
+	if payload.UserId == player.UserId then
+		return -- your own state is on the status banner, not in the teammate list
+	end
+	if injured[payload.UserId] then
+		injured[payload.UserId].ExpiresAt = payload.ExpiresAt
+		return
+	end
+
+	local frame = Widgets.panel({
+		Size = UDim2.new(0, 280, 0, 44),
+		BackgroundColor3 = Theme.Colour.Crimson,
+		BackgroundTransparency = 0.55,
+		Parent = injuredList,
+	})
+	Widgets.padding(Theme.Padding.Tight, { Left = 10, Right = 10 }).Parent = frame
+
+	local arrow = Widgets.label("▲", {
+		Size = UDim2.new(0, 30, 1, 0),
+		Font = Theme.Font.Heading,
+		TextSize = 22,
+		TextColor3 = Theme.Colour.CrimsonBright,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = frame,
+	})
+
+	local nameLabel = Widgets.label(`{payload.Name} is down`, {
+		Position = UDim2.new(0, 34, 0, 2),
+		Size = UDim2.new(1, -34, 0, 18),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.Text,
+		Parent = frame,
+	})
+
+	local timeLabel = Widgets.label("", {
+		Position = UDim2.new(0, 34, 0, 20),
+		Size = UDim2.new(1, -34, 0, 14),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.Bone,
+		Parent = frame,
+	})
+
+	injured[payload.UserId] = {
+		UserId = payload.UserId,
+		Name = payload.Name,
+		ExpiresAt = payload.ExpiresAt or (Util.now() + 30),
+		Frame = frame,
+		NameLabel = nameLabel,
+		ArrowLabel = arrow,
+		TimeLabel = timeLabel,
+	}
+
+	AlertController.toast(`{payload.Name} is injured!`, "Danger", 3)
+end
+
+local function removeInjured(userId: number)
+	local entry = injured[userId]
+	if not entry then
+		return
+	end
+	injured[userId] = nil
+	if entry.Frame.Parent then
+		entry.Frame:Destroy()
+	end
+end
+
+--[[
+	Points the arrow at the downed player and reports the distance.
+
+	The rotation is computed in camera space so "up" on the arrow always means
+	"straight ahead", which is the only mapping people read correctly without
+	thinking about it.
+]]
+local function updateInjuredArrows()
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return
+	end
+
+	local origin = Util.getPosition(player) or camera.CFrame.Position
+
+	for userId, entry in injured do
+		local remaining = math.max(0, entry.ExpiresAt - Util.now())
+		if remaining <= 0 then
+			removeInjured(userId)
+			continue
+		end
+
+		local target = Players:GetPlayerByUserId(userId)
+		local targetPosition = target and Util.getPosition(target)
+
+		if targetPosition then
+			local toTarget = targetPosition - origin
+			local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
+
+			local look = camera.CFrame.LookVector
+			local flatLook = Vector3.new(look.X, 0, look.Z)
+
+			if flat.Magnitude > 0.1 and flatLook.Magnitude > 0.1 then
+				local right = flatLook:Cross(Vector3.yAxis)
+				local angle = math.atan2(flat.Unit:Dot(right), flat.Unit:Dot(flatLook.Unit))
+				entry.ArrowLabel.Rotation = math.deg(angle)
+			end
+
+			entry.TimeLabel.Text = `{math.ceil(remaining)}s  -  {math.floor(flat.Magnitude)} studs away`
+		else
+			entry.TimeLabel.Text = `{math.ceil(remaining)}s`
+		end
+
+		-- Turns red and pulses as the clock runs out.
+		local urgency = 1 - (remaining / 30)
+		entry.Frame.BackgroundTransparency = 0.55 - urgency * 0.2
+		if remaining <= 10 then
+			local pulse = (math.sin(os.clock() * 8) + 1) / 2
+			entry.ArrowLabel.TextColor3 = Theme.Colour.CrimsonBright:Lerp(Theme.Colour.Text, pulse * 0.6)
+		end
+	end
+end
+
+--==========================================================================
+-- Construction
+--==========================================================================
+
+local function build()
+	gui = Widgets.new("ScreenGui", {
+		Name = "DollysHomeAlerts",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 12,
+		Parent = player:WaitForChild("PlayerGui"),
+	}) :: ScreenGui
+
+	toastList = Widgets.new("Frame", {
+		Name = "Toasts",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -150),
+		Size = UDim2.new(0, 400, 0, 200),
+		BackgroundTransparency = 1,
+		Parent = gui,
+	}) :: Frame
+	Widgets.new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Vertical,
+		VerticalAlignment = Enum.VerticalAlignment.Bottom,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		Padding = UDim.new(0, 5),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = toastList,
+	})
+
+	injuredList = Widgets.new("Frame", {
+		Name = "Injured",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -16, 0, Theme.TopBarInset),
+		Size = UDim2.new(0, 280, 0, 300),
+		BackgroundTransparency = 1,
+		Parent = gui,
+	}) :: Frame
+	Widgets.new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Vertical,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = injuredList,
+	})
+
+	subtitle = Widgets.outlinedLabel("", {
+		Name = "Subtitle",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -110),
+		Size = UDim2.new(0, 640, 0, 28),
+		Font = Theme.Font.Flavour,
+		TextSize = Theme.TextSize.Body,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextTransparency = 1,
+		TextColor3 = Theme.Colour.Bone,
+		Parent = gui,
+	})
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function AlertController.start()
+	build()
+
+	Net.Events.TaskCompleted.OnClientEvent:Connect(function(payload)
+		AlertController.toast(`{payload.Label} -- done!`, "Task", 5)
+	end)
+
+	Net.Events.TaskProgress.OnClientEvent:Connect(function(payload)
+		if payload.Complete then
+			return -- TaskCompleted already covers it
+		end
+		if payload.By then
+			AlertController.toast(`{payload.Label}  {payload.Current}/{payload.Goal}`, "Info", 2)
+		end
+	end)
+
+	Net.Events.InjuredAlert.OnClientEvent:Connect(function(payload)
+		if payload.Kind == "Downed" then
+			addInjured(payload)
+		elseif payload.Kind == "Revived" then
+			removeInjured(payload.UserId)
+			if payload.ReviverName then
+				AlertController.toast(`{payload.ReviverName} revived {payload.Name}`, "Success", 3)
+			end
+		elseif payload.Kind == "Eliminated" then
+			removeInjured(payload.UserId)
+			AlertController.toast(`{payload.Name} didn't make it.`, "Danger", 4)
+		end
+	end)
+
+	Net.Events.HelperMessage.OnClientEvent:Connect(function(payload)
+		AlertController.subtitle(payload.Helper, payload.Text, Theme.Colour.Ghost, 6)
+		if payload.SafeZone then
+			AlertController.toast("Robby has opened sanctified ground nearby.", "Helper", 5)
+		end
+	end)
+
+	Net.Events.Announce.OnClientEvent:Connect(function(payload)
+		if type(payload) ~= "table" then
+			return
+		end
+
+		local kind = payload.Kind
+
+		if kind == "KillerLine" then
+			AlertController.subtitle(payload.Speaker, payload.Text, Theme.Colour.CrimsonBright, 5)
+		elseif kind == "Stake" then
+			AlertController.toast(
+				`{payload.Text}  ({math.floor(payload.Health)}/{payload.MaxHealth} -- stunned {payload.StunSeconds}s)`,
+				"Stake",
+				4
+			)
+		elseif kind == "MapChosen" or kind == "Objective" or kind == "Waiting" or kind == "Spectating" then
+			AlertController.toast(payload.Text, "Objective", 4)
+		elseif kind == "Danger" then
+			AlertController.toast(payload.Text, "Danger", 3)
+		elseif kind == "Combat" then
+			AlertController.toast(payload.Text, "Combat", 2)
+		elseif kind == "ShopSuccess" then
+			AlertController.toast(payload.Text, "Success", 3)
+		elseif kind == "ShopError" then
+			AlertController.toast(payload.Text, "Error", 3)
+		elseif kind == "Error" then
+			AlertController.toast(payload.Text, "Error", 4)
+		end
+	end)
+
+	-- Clear the teammate list between rounds.
+	Net.getState():GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(function()
+		local phase = Net.getStateValue(StateKeys.Game.Phase, "")
+		if phase ~= StateKeys.Phase.Active then
+			for userId in injured do
+				removeInjured(userId)
+			end
+		end
+	end)
+
+	RunService.RenderStepped:Connect(function()
+		local ok = pcall(updateInjuredArrows)
+		if not ok then
+			-- A player leaving mid-frame is the usual cause; the next frame is fine.
+		end
+	end)
+end
+
+return AlertController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX38">
+				<Properties>
+					<string name="Name">AudioController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	AudioController.luau
+	--------------------------------------------------------------------------
+	Proximity dread: a heartbeat that gets faster and louder as the nearest
+	killer closes, and per-killer approach loops played from the killer's own
+	position so they're directional.
+
+	Killers are found client-side via the DH_ActiveKiller tag rather than
+	replicated over a remote. Their models are already replicated -- their
+	positions are public knowledge to the engine, so there's nothing to hide by
+	withholding them, and reading tags locally costs the server nothing.
+
+	Every SoundId in Shared/Sounds.luau is blank until you fill it in; this
+	controller does nothing audible until then and does not error.
+	--------------------------------------------------------------------------
+]]
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Net = require(Shared.Net)
+local Sounds = require(Shared.Sounds)
+local StateKeys = require(Shared.StateKeys)
+local Tags = require(Shared.Tags)
+local Util = require(Shared.Util)
+
+local player = Players.LocalPlayer
+
+local AudioController = {}
+
+-- Distance at which the heartbeat starts, and where it peaks.
+local HEARTBEAT_START = 70
+local HEARTBEAT_PEAK = 12
+
+local heartbeat: Sound? = nil
+local ambience: Sound? = nil
+local approachSounds: { [Model]: Sound } = {}
+local currentAmbienceKey = ""
+
+--==========================================================================
+-- Heartbeat
+--==========================================================================
+
+local function nearestKillerDistance(): (number, string?)
+	local origin = Util.getPosition(player)
+	if not origin then
+		return math.huge, nil
+	end
+
+	local best = math.huge
+	local bestId: string? = nil
+
+	for _, model in CollectionService:GetTagged(Tags.ActiveKiller) do
+		if not model:IsA("Model") or not model.PrimaryPart then
+			continue
+		end
+		local distance = (model.PrimaryPart.Position - origin).Magnitude
+		if distance < best then
+			best = distance
+			bestId = model:GetAttribute(StateKeys.Killer.KillerId) :: string?
+		end
+	end
+
+	return best, bestId
+end
+
+local function updateHeartbeat(dt: number)
+	if not heartbeat then
+		return
+	end
+
+	local inRound = Net.getStateValue(StateKeys.Game.Phase, "") == StateKeys.Phase.Active
+	local safe = player:GetAttribute(StateKeys.Player.InSafeZone) == true
+	local eliminated = player:GetAttribute(StateKeys.Player.Eliminated) == true
+
+	local targetVolume = 0
+	local targetPitch = 1
+
+	if inRound and not safe and not eliminated then
+		local distance = nearestKillerDistance()
+		if distance < HEARTBEAT_START then
+			-- 0 at the outer edge, 1 when they're on top of you.
+			local closeness = math.clamp(
+				(HEARTBEAT_START - distance) / (HEARTBEAT_START - HEARTBEAT_PEAK),
+				0,
+				1
+			)
+			targetVolume = closeness * 0.55
+			targetPitch = 0.85 + closeness * 0.75
+		end
+
+		-- Being downed is its own kind of panic.
+		if player:GetAttribute(StateKeys.Player.Injured) == true then
+			targetVolume = math.max(targetVolume, 0.45)
+			targetPitch = math.max(targetPitch, 1.4)
+		end
+	end
+
+	heartbeat.Volume = Util.damp(heartbeat.Volume, targetVolume, 4, dt)
+	heartbeat.PlaybackSpeed = Util.damp(heartbeat.PlaybackSpeed, targetPitch, 4, dt)
+
+	if heartbeat.Volume > 0.005 and not heartbeat.IsPlaying then
+		heartbeat:Play()
+	elseif heartbeat.Volume <= 0.005 and heartbeat.IsPlaying then
+		heartbeat:Stop()
+	end
+end
+
+--==========================================================================
+-- Per-killer approach loops
+--==========================================================================
+
+local function syncApproachSounds()
+	local seen: { [Model]: boolean } = {}
+
+	for _, model in CollectionService:GetTagged(Tags.ActiveKiller) do
+		if not model:IsA("Model") or not model.PrimaryPart then
+			continue
+		end
+		seen[model] = true
+
+		if approachSounds[model] then
+			continue
+		end
+
+		local killerId = model:GetAttribute(StateKeys.Killer.KillerId) :: string?
+		local soundId = killerId and Sounds.KillerApproach[killerId] or nil
+		local sound = Sounds.create(soundId, model.PrimaryPart, {
+			Looped = true,
+			Volume = 0.6,
+			RollOffMode = Enum.RollOffMode.InverseTapered,
+			RollOffMinDistance = 8,
+			RollOffMaxDistance = 90,
+		})
+
+		if sound then
+			sound:Play()
+			approachSounds[model] = sound
+		end
+	end
+
+	for model, sound in approachSounds do
+		if not seen[model] or not model.Parent then
+			sound:Destroy()
+			approachSounds[model] = nil
+		end
+	end
+end
+
+--==========================================================================
+-- Ambience
+--==========================================================================
+
+local function updateAmbience()
+	local phase = Net.getStateValue(StateKeys.Game.Phase, "")
+	local mapId = Net.getStateValue(StateKeys.Game.MapId, "") :: string
+
+	local key = (phase == StateKeys.Phase.Active or phase == StateKeys.Phase.Starting) and mapId ~= "" and mapId
+		or "Lobby"
+
+	if key == currentAmbienceKey then
+		return
+	end
+	currentAmbienceKey = key
+
+	if ambience then
+		ambience:Destroy()
+		ambience = nil
+	end
+
+	ambience = Sounds.create(Sounds.Ambience[key], SoundService, {
+		Looped = true,
+		Volume = 0.35,
+	})
+	if ambience then
+		ambience:Play()
+	end
+end
+
+--==========================================================================
+-- One-shots
+--==========================================================================
+
+local function playEffect(name: string, volume: number?)
+	local sound = Sounds.create(Sounds.Effects[name], SoundService, { Volume = volume or 0.6 })
+	if sound then
+		sound:Play()
+		sound.Ended:Once(function()
+			sound:Destroy()
+		end)
+	end
+end
+
+AudioController.playEffect = playEffect
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function AudioController.start()
+	heartbeat = Sounds.create(Sounds.Heartbeat, SoundService, {
+		Looped = true,
+		Volume = 0,
+	})
+
+	Net.Events.TaskCompleted.OnClientEvent:Connect(function()
+		playEffect("TaskComplete")
+	end)
+
+	Net.Events.InjuredAlert.OnClientEvent:Connect(function(payload)
+		if payload.Kind == "Downed" then
+			playEffect(payload.UserId == player.UserId and "PlayerDowned" or "Discovered", 0.5)
+		elseif payload.Kind == "Revived" then
+			playEffect("PlayerRevived", 0.5)
+		end
+	end)
+
+	Net.Events.RoundResults.OnClientEvent:Connect(function(payload)
+		playEffect(payload.Victory and "Victory" or "Defeat", 0.7)
+	end)
+
+	Net.Events.HelperMessage.OnClientEvent:Connect(function()
+		playEffect("HelperAppear", 0.5)
+	end)
+
+	local state = Net.getState()
+	state:GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(updateAmbience)
+	state:GetAttributeChangedSignal(StateKeys.Game.MapId):Connect(updateAmbience)
+	updateAmbience()
+
+	CollectionService:GetInstanceAddedSignal(Tags.ActiveKiller):Connect(syncApproachSounds)
+	CollectionService:GetInstanceRemovedSignal(Tags.ActiveKiller):Connect(syncApproachSounds)
+	syncApproachSounds()
+
+	RunService.Heartbeat:Connect(function(dt)
+		local ok, err = pcall(updateHeartbeat, dt)
+		if not ok and Config.Debug.Verbose then
+			warn(`[AudioController] {err}`)
+		end
+	end)
+end
+
+return AudioController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX39">
+				<Properties>
+					<string name="Name">HudController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	HudController.luau
+	--------------------------------------------------------------------------
+	The in-round HUD: timer, objective tracker, noise meter, health, stamina.
+
+	Almost everything here is driven by replicated attributes rather than
+	RemoteEvents. The noise meter in particular updates ten times a second, and
+	doing that over a remote for twelve players would be a lot of traffic for a
+	number Roblox will happily replicate for free.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Net = require(Shared.Net)
+local StateKeys = require(Shared.StateKeys)
+local Util = require(Shared.Util)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+local Widgets = require(script.Parent.Parent.UI.Widgets)
+
+local player = Players.LocalPlayer
+
+local HudController = {}
+
+local gui: ScreenGui
+local timerLabel: TextLabel
+local phaseLabel: TextLabel
+local mapLabel: TextLabel
+local killerLabel: TextLabel
+local objectiveList: Frame
+local noiseBar: Widgets.Bar
+local noiseValue: TextLabel
+local staminaBar: Widgets.Bar
+local healthBar: Widgets.Bar
+local stakeLabel: TextLabel
+local statusLabel: TextLabel
+local vignette: Frame
+
+local objectiveRows: { [string]: { Row: Frame, Label: TextLabel, Detail: TextLabel } } = {}
+
+--==========================================================================
+-- Construction
+--==========================================================================
+
+local function buildTopBar(parent: Instance)
+	local top = Widgets.panel({
+		Name = "TopBar",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, Theme.TopBarInset),
+		Size = UDim2.new(0, 420, 0, 68),
+		BackgroundTransparency = 0.25,
+		Parent = parent,
+	})
+	Widgets.padding(Theme.Padding.Tight).Parent = top
+
+	timerLabel = Widgets.label("10:00", {
+		Size = UDim2.new(1, 0, 0, 34),
+		Font = Theme.Font.Numeric,
+		TextSize = 32,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = top,
+	})
+
+	phaseLabel = Widgets.label("", {
+		Position = UDim2.new(0, 0, 0, 34),
+		Size = UDim2.new(1, 0, 0, 16),
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = top,
+	})
+
+	local footer = Widgets.new("Frame", {
+		Position = UDim2.new(0, 0, 0, 50),
+		Size = UDim2.new(1, 0, 0, 14),
+		BackgroundTransparency = 1,
+		Parent = top,
+	})
+
+	mapLabel = Widgets.label("", {
+		Size = UDim2.new(0.5, 0, 1, 0),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextFaint,
+		Parent = footer,
+	})
+
+	killerLabel = Widgets.label("", {
+		Position = UDim2.new(0.5, 0, 0, 0),
+		Size = UDim2.new(0.5, 0, 1, 0),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.CrimsonBright,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Parent = footer,
+	})
+end
+
+local function buildObjectiveTracker(parent: Instance)
+	local panel = Widgets.panel({
+		Name = "Objectives",
+		Position = UDim2.new(0, 16, 0, Theme.TopBarInset),
+		Size = UDim2.new(0, 250, 0, 40),
+		BackgroundTransparency = 0.25,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Parent = parent,
+	})
+	Widgets.padding(Theme.Padding.Normal).Parent = panel
+
+	Widgets.label("OBJECTIVES", {
+		Size = UDim2.new(1, 0, 0, 16),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.Gold,
+		Parent = panel,
+	})
+
+	objectiveList = Widgets.new("Frame", {
+		Name = "List",
+		Position = UDim2.new(0, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, 0),
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Parent = panel,
+	}) :: Frame
+	Widgets.list(Enum.FillDirection.Vertical, 4).Parent = objectiveList
+end
+
+local function buildVitals(parent: Instance)
+	local panel = Widgets.panel({
+		Name = "Vitals",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 16, 1, -16),
+		Size = UDim2.new(0, 240, 0, 132),
+		BackgroundTransparency = 0.25,
+		Parent = parent,
+	})
+	Widgets.padding(Theme.Padding.Normal).Parent = panel
+
+	-- Noise first: it is the number that decides whether you live.
+	noiseBar = Widgets.bar("NOISE", Theme.Colour.NoiseQuiet, {
+		Size = UDim2.new(1, 0, 0, 34),
+		Parent = panel,
+	})
+	noiseBar.Root.Parent = panel
+
+	noiseValue = Widgets.label("QUIET", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.new(0.6, 0, 0, 14),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Tiny,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextColor3 = Theme.Colour.NoiseQuiet,
+		Parent = noiseBar.Root,
+	})
+
+	healthBar = Widgets.bar("HEALTH", Theme.Colour.Health, {
+		Position = UDim2.new(0, 0, 0, 42),
+		Size = UDim2.new(1, 0, 0, 34),
+		Parent = panel,
+	})
+	healthBar.Root.Parent = panel
+
+	staminaBar = Widgets.bar("STAMINA", Theme.Colour.Stamina, {
+		Position = UDim2.new(0, 0, 0, 84),
+		Size = UDim2.new(1, 0, 0, 34),
+		Parent = panel,
+	})
+	staminaBar.Root.Parent = panel
+end
+
+local function buildStakeReadout(parent: Instance)
+	local panel = Widgets.panel({
+		Name = "Stake",
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -16, 1, -16),
+		Size = UDim2.new(0, 190, 0, 52),
+		BackgroundTransparency = 0.25,
+		Parent = parent,
+	})
+	Widgets.padding(Theme.Padding.Normal).Parent = panel
+
+	Widgets.label("STAKE", {
+		Size = UDim2.new(1, 0, 0, 14),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextDim,
+		Parent = panel,
+	})
+
+	stakeLabel = Widgets.label("Wooden Stake", {
+		Position = UDim2.new(0, 0, 0, 16),
+		Size = UDim2.new(1, 0, 0, 18),
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.Bone,
+		Parent = panel,
+	})
+end
+
+local function buildStatusBanner(parent: Instance)
+	statusLabel = Widgets.outlinedLabel("", {
+		Name = "Status",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, Theme.TopBarInset + 80),
+		Size = UDim2.new(0, 520, 0, 32),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Heading,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Theme.Colour.Gold,
+		TextTransparency = 1,
+		Parent = parent,
+	})
+end
+
+--- Edge glow that pulses harder as noise climbs, so you feel how loud you are
+--- without having to look away from the room you're in.
+local function buildVignette(parent: Instance): ImageLabel
+	vignette = Widgets.new("Frame", {
+		Name = "Vignette",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 0,
+		Parent = parent,
+	}) :: Frame
+
+	return Widgets.new("ImageLabel", {
+		Name = "Glow",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		-- Roblox's stock radial-fade asset, used here as a soft edge mask.
+		Image = "rbxassetid://5107152351",
+		ImageColor3 = Theme.Colour.Crimson,
+		ImageTransparency = 1,
+		ScaleType = Enum.ScaleType.Stretch,
+		Parent = vignette,
+	}) :: ImageLabel
+end
+
+--==========================================================================
+-- Updates
+--==========================================================================
+
+local function syncObjectives()
+	local folder = Net.getObjectivesFolder()
+	local seen: { [string]: boolean } = {}
+
+	for _, child in folder:GetChildren() do
+		if not child:IsA("Configuration") then
+			continue
+		end
+		seen[child.Name] = true
+
+		local row = objectiveRows[child.Name]
+		if not row then
+			local container = Widgets.new("Frame", {
+				Name = child.Name,
+				Size = UDim2.new(1, 0, 0, 30),
+				BackgroundTransparency = 1,
+				LayoutOrder = (child:GetAttribute(StateKeys.Objective.Order) :: number?) or 1,
+				Parent = objectiveList,
+			}) :: Frame
+
+			local main = Widgets.label("", {
+				Size = UDim2.new(1, 0, 0, 17),
+				TextSize = Theme.TextSize.Small,
+				Parent = container,
+			})
+
+			local detail = Widgets.label("", {
+				Position = UDim2.new(0, 0, 0, 16),
+				Size = UDim2.new(1, 0, 0, 13),
+				TextSize = Theme.TextSize.Tiny,
+				TextColor3 = Theme.Colour.TextFaint,
+				Parent = container,
+			})
+
+			row = { Row = container, Label = main, Detail = detail }
+			objectiveRows[child.Name] = row
+		end
+
+		local label = (child:GetAttribute(StateKeys.Objective.ShortLabel) :: string?) or child.Name
+		local current = (child:GetAttribute(StateKeys.Objective.Current) :: number?) or 0
+		local goal = (child:GetAttribute(StateKeys.Objective.Goal) :: number?) or 1
+		local complete = child:GetAttribute(StateKeys.Objective.Complete) == true
+		local detail = (child:GetAttribute(StateKeys.Objective.Detail) :: string?) or ""
+
+		row.Label.Text = complete and `✓  {label}` or `○  {label}   {current}/{goal}`
+		row.Label.TextColor3 = complete and Theme.Colour.MossBright or Theme.Colour.Text
+		row.Detail.Text = detail
+		row.Detail.Visible = detail ~= ""
+		row.Row.Size = UDim2.new(1, 0, 0, detail ~= "" and 30 or 18)
+	end
+
+	for id, row in objectiveRows do
+		if not seen[id] then
+			row.Row:Destroy()
+			objectiveRows[id] = nil
+		end
+	end
+end
+
+local function updateNoise()
+	local level = (player:GetAttribute(StateKeys.Player.Noise) :: number?) or 0
+	local tierName = (player:GetAttribute(StateKeys.Player.NoiseTier) :: string?) or "Quiet"
+	local colour = Theme.noiseColour(tierName)
+
+	noiseBar:set(level / Config.Noise.Max, `NOISE  {math.floor(level)}`, colour)
+	noiseValue.Text = Theme.noiseLabel(tierName)
+	noiseValue.TextColor3 = colour
+end
+
+local function updateVitals()
+	local _, humanoid = Util.getCharacterParts(player)
+	if humanoid and humanoid.MaxHealth > 0 then
+		healthBar:set(humanoid.Health / humanoid.MaxHealth, `HEALTH  {math.floor(humanoid.Health)}`)
+	end
+
+	local stamina = (player:GetAttribute(StateKeys.Player.Stamina) :: number?) or Config.Player.MaxStamina
+	staminaBar.Root.Visible = Config.Player.StaminaEnabled
+	staminaBar:set(stamina / Config.Player.MaxStamina, "STAMINA")
+
+	local stakeId = (player:GetAttribute(StateKeys.Player.EquippedStake) :: string?) or Config.Economy.StartingStake
+	local tier = Config.getStakeTier(stakeId)
+	if tier then
+		local readyAt = (player:GetAttribute(StateKeys.Player.StakeReadyAt) :: number?) or 0
+		local cooling = readyAt - Util.now()
+		if cooling > 0 then
+			stakeLabel.Text = `{tier.Name}  ({string.format("%.1f", cooling)}s)`
+			stakeLabel.TextColor3 = Theme.Colour.TextFaint
+		else
+			stakeLabel.Text = tier.Name
+			stakeLabel.TextColor3 = Theme.rarityColour(tier.Id)
+		end
+	end
+end
+
+local function updateStatus()
+	local text = ""
+	local colour = Theme.Colour.Gold
+
+	if player:GetAttribute(StateKeys.Player.Injured) == true then
+		local endsAt = (player:GetAttribute(StateKeys.Player.ReviveEndsAt) :: number?) or 0
+		local remaining = math.max(0, math.ceil(endsAt - Util.now()))
+		text = `YOU ARE INJURED  -  {remaining}s  -  CALL FOR HELP`
+		colour = Theme.Colour.CrimsonBright
+	elseif player:GetAttribute(StateKeys.Player.Eliminated) == true then
+		text = "ELIMINATED  -  SPECTATING"
+		colour = Theme.Colour.TextDim
+	elseif player:GetAttribute(StateKeys.Player.InSafeZone) == true then
+		text = "SANCTIFIED GROUND  -  THEY CANNOT REACH YOU HERE"
+		colour = Theme.Colour.Gold
+	elseif player:GetAttribute(StateKeys.Player.Hidden) == true then
+		local kind = (player:GetAttribute(StateKeys.Player.HidingKind) :: string?) or "Spot"
+		text = `HIDDEN ({kind})  -  PRESS E OR Q TO COME OUT`
+		colour = Theme.Colour.Bone
+	end
+
+	if statusLabel.Text ~= text then
+		statusLabel.Text = text
+		TweenService:Create(statusLabel, Theme.Tween.Fast, { TextTransparency = text == "" and 1 or 0 }):Play()
+	end
+end
+
+local function updateTimer()
+	local phase = Net.getStateValue(StateKeys.Game.Phase, StateKeys.Phase.Booting)
+	local endsAt = Net.getStateValue(StateKeys.Game.PhaseEndsAt, 0) :: number
+	local remaining = math.max(0, endsAt - Util.now())
+
+	timerLabel.Text = Util.formatClock(remaining)
+
+	if phase == StateKeys.Phase.Active then
+		phaseLabel.Text = "TIME REMAINING"
+		timerLabel.TextColor3 = remaining <= 60 and Theme.Colour.CrimsonBright or Theme.Colour.Text
+	elseif phase == StateKeys.Phase.Intermission then
+		phaseLabel.Text = "NEXT ROUND IN"
+		timerLabel.TextColor3 = Theme.Colour.Text
+	elseif phase == StateKeys.Phase.Starting then
+		phaseLabel.Text = "THE HOUSE IS WAKING UP"
+		timerLabel.TextColor3 = Theme.Colour.Gold
+	elseif phase == StateKeys.Phase.Results then
+		phaseLabel.Text = "ROUND OVER"
+		timerLabel.TextColor3 = Theme.Colour.TextDim
+	else
+		phaseLabel.Text = "STARTING UP"
+	end
+
+	local mapName = Net.getStateValue(StateKeys.Game.MapName, "") :: string
+	mapLabel.Text = mapName ~= "" and mapName or ""
+
+	local killers = Net.getStateValue(StateKeys.Game.KillerNames, "") :: string
+	killerLabel.Text = killers ~= "" and `Hunting: {killers}` or ""
+
+	-- Hide the round-only panels during the intermission.
+	local inRound = phase == StateKeys.Phase.Active or phase == StateKeys.Phase.Starting
+	local objectivePanel = objectiveList.Parent
+	if objectivePanel and objectivePanel:IsA("GuiObject") then
+		objectivePanel.Visible = inRound
+	end
+end
+
+--- The vignette breathes with your noise level, so you feel the danger without
+--- having to look at the meter.
+local function updateVignette(gradient: ImageLabel, dt: number)
+	local level = (player:GetAttribute(StateKeys.Player.Noise) :: number?) or 0
+	local injured = player:GetAttribute(StateKeys.Player.Injured) == true
+
+	local intensity = math.clamp(level / Config.Noise.Max, 0, 1) * 0.55
+	if injured then
+		intensity = 0.75
+	end
+
+	local pulse = 0
+	if intensity > 0.1 then
+		pulse = math.sin(os.clock() * (2 + intensity * 6)) * 0.06 * intensity
+	end
+
+	local target = 1 - math.clamp(intensity + pulse, 0, 0.8)
+	gradient.ImageTransparency = Util.damp(gradient.ImageTransparency, target, 6, dt)
+	gradient.ImageColor3 = injured and Theme.Colour.Crimson
+		or Theme.noiseColour((player:GetAttribute(StateKeys.Player.NoiseTier) :: string?) or "Quiet")
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function HudController.start()
+	gui = Widgets.new("ScreenGui", {
+		Name = "DollysHomeHUD",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 10,
+		Parent = player:WaitForChild("PlayerGui"),
+	}) :: ScreenGui
+
+	local gradient = buildVignette(gui)
+	buildTopBar(gui)
+	buildObjectiveTracker(gui)
+	buildVitals(gui)
+	buildStakeReadout(gui)
+	buildStatusBanner(gui)
+
+	local objectivesFolder = Net.getObjectivesFolder()
+	objectivesFolder.ChildAdded:Connect(function(child)
+		syncObjectives()
+		child.AttributeChanged:Connect(syncObjectives)
+	end)
+	objectivesFolder.ChildRemoved:Connect(syncObjectives)
+	for _, child in objectivesFolder:GetChildren() do
+		child.AttributeChanged:Connect(syncObjectives)
+	end
+	syncObjectives()
+
+	-- Attribute-driven pieces update on change rather than every frame.
+	player:GetAttributeChangedSignal(StateKeys.Player.Noise):Connect(updateNoise)
+	player:GetAttributeChangedSignal(StateKeys.Player.NoiseTier):Connect(updateNoise)
+	updateNoise()
+
+	RunService.RenderStepped:Connect(function(dt)
+		local ok, err = pcall(function()
+			updateTimer()
+			updateVitals()
+			updateStatus()
+			updateVignette(gradient, dt)
+		end)
+		if not ok and Config.Debug.Verbose then
+			warn(`[HudController] {err}`)
+		end
+	end)
+end
+
+function HudController.setVisible(visible: boolean)
+	if gui then
+		gui.Enabled = visible
+	end
+end
+
+return HudController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX40">
+				<Properties>
+					<string name="Name">InputController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	InputController.luau
+	--------------------------------------------------------------------------
+	Keyboard, gamepad and touch input.
+
+	Everything is bound through ContextActionService rather than
+	UserInputService, because CAS gives us mobile buttons for free -- pass
+	`createTouchButton = true` and phone players get a real control instead of
+	nothing. Given that most Roblox horror players are on phones, that isn't
+	optional.
+
+	Nothing here decides anything. Sprint sends intent to the server, which
+	owns speed; attack sends intent, which the server validates. A client that
+	spams these gets no advantage.
+	--------------------------------------------------------------------------
+]]
+
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Net = require(Shared.Net)
+local StateKeys = require(Shared.StateKeys)
+
+local player = Players.LocalPlayer
+
+local InputController = {}
+
+local ACTION_SPRINT = "DollysHome_Sprint"
+local ACTION_CROUCH = "DollysHome_Crouch"
+local ACTION_ATTACK = "DollysHome_Attack"
+local ACTION_HIDE = "DollysHome_LeaveHiding"
+local ACTION_HEAL = "DollysHome_Heal"
+local ACTION_SPEED = "DollysHome_Speed"
+
+local sprinting = false
+local crouching = false
+
+--==========================================================================
+-- Guards
+--==========================================================================
+
+--- Input is ignored while downed, eliminated, or between rounds.
+local function canAct(): boolean
+	if player:GetAttribute(StateKeys.Player.Injured) == true then
+		return false
+	end
+	if player:GetAttribute(StateKeys.Player.Eliminated) == true then
+		return false
+	end
+	return Net.getStateValue(StateKeys.Game.Phase, "") == StateKeys.Phase.Active
+end
+
+--==========================================================================
+-- Handlers
+--==========================================================================
+
+local function onSprint(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state == Enum.UserInputState.Begin then
+		if not canAct() then
+			return Enum.ContextActionResult.Pass
+		end
+		sprinting = true
+	elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+		sprinting = false
+	else
+		return Enum.ContextActionResult.Pass
+	end
+
+	Net.Events.SetSprinting:FireServer(sprinting)
+	return Enum.ContextActionResult.Sink
+end
+
+local function onCrouch(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+	if not canAct() then
+		return Enum.ContextActionResult.Pass
+	end
+
+	-- Toggle rather than hold: crouch-walking is something you do for a whole
+	-- corridor, and holding a key for thirty seconds is miserable on a phone.
+	crouching = not crouching
+	Net.Events.SetCrouching:FireServer(crouching)
+	return Enum.ContextActionResult.Sink
+end
+
+local function onAttack(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+	if not canAct() then
+		return Enum.ContextActionResult.Pass
+	end
+	if player:GetAttribute(StateKeys.Player.Hidden) == true then
+		return Enum.ContextActionResult.Pass
+	end
+
+	Net.Events.Attack:FireServer()
+	return Enum.ContextActionResult.Sink
+end
+
+local function onLeaveHiding(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+	if player:GetAttribute(StateKeys.Player.Hidden) ~= true then
+		return Enum.ContextActionResult.Pass
+	end
+
+	Net.Events.RequestHide:FireServer()
+	return Enum.ContextActionResult.Sink
+end
+
+local function useConsumable(itemId: string)
+	return function(_action: string, state: Enum.UserInputState): Enum.ContextActionResult
+		if state ~= Enum.UserInputState.Begin then
+			return Enum.ContextActionResult.Pass
+		end
+		Net.Events.UseConsumable:FireServer(itemId)
+		return Enum.ContextActionResult.Sink
+	end
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function InputController.start()
+	local touch = UserInputService.TouchEnabled
+
+	ContextActionService:BindAction(
+		ACTION_SPRINT,
+		onSprint,
+		touch,
+		Enum.KeyCode.LeftShift,
+		Enum.KeyCode.RightShift,
+		Enum.KeyCode.ButtonL3
+	)
+	ContextActionService:SetTitle(ACTION_SPRINT, "RUN")
+
+	ContextActionService:BindAction(ACTION_CROUCH, onCrouch, touch, Enum.KeyCode.C, Enum.KeyCode.ButtonB)
+	ContextActionService:SetTitle(ACTION_CROUCH, "CROUCH")
+
+	ContextActionService:BindAction(
+		ACTION_ATTACK,
+		onAttack,
+		touch,
+		Enum.UserInputType.MouseButton1,
+		Enum.KeyCode.ButtonR2
+	)
+	ContextActionService:SetTitle(ACTION_ATTACK, "STAKE")
+
+	ContextActionService:BindAction(ACTION_HIDE, onLeaveHiding, touch, Enum.KeyCode.Q, Enum.KeyCode.ButtonY)
+	ContextActionService:SetTitle(ACTION_HIDE, "EXIT")
+
+	ContextActionService:BindAction(ACTION_HEAL, useConsumable(Config.Shop.HealthPotion.Id), false, Enum.KeyCode.One)
+	ContextActionService:BindAction(ACTION_SPEED, useConsumable(Config.Shop.SpeedPotion.Id), false, Enum.KeyCode.Two)
+
+	-- Position the touch buttons out of the way of the movement thumbstick.
+	if touch then
+		ContextActionService:SetPosition(ACTION_SPRINT, UDim2.new(1, -160, 1, -180))
+		ContextActionService:SetPosition(ACTION_ATTACK, UDim2.new(1, -90, 1, -180))
+		ContextActionService:SetPosition(ACTION_CROUCH, UDim2.new(1, -160, 1, -110))
+		ContextActionService:SetPosition(ACTION_HIDE, UDim2.new(1, -90, 1, -110))
+	end
+
+	-- Release the sprint flag if the round ends or the player goes down while
+	-- the key is still held, so they don't come back stuck at sprint speed.
+	local function clearIfNeeded()
+		if sprinting and not canAct() then
+			sprinting = false
+			Net.Events.SetSprinting:FireServer(false)
+		end
+		if crouching and not canAct() then
+			crouching = false
+			Net.Events.SetCrouching:FireServer(false)
+		end
+	end
+
+	player:GetAttributeChangedSignal(StateKeys.Player.Injured):Connect(clearIfNeeded)
+	player:GetAttributeChangedSignal(StateKeys.Player.Eliminated):Connect(clearIfNeeded)
+	Net.getState():GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(clearIfNeeded)
+end
+
+function InputController.isCrouching(): boolean
+	return crouching
+end
+
+return InputController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX41">
+				<Properties>
+					<string name="Name">ModalController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	ModalController.luau
+	--------------------------------------------------------------------------
+	The four things that take over the screen: lore notes, the grandfather clock
+	minigame, Ava's questions, and the shop.
+
+	One modal at a time, one shared frame, one close path. Modals opened during
+	a round do NOT pause anything -- reading a note while Barbara is two rooms
+	away is meant to be a bad idea.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Net = require(Shared.Net)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+local Widgets = require(script.Parent.Parent.UI.Widgets)
+
+local player = Players.LocalPlayer
+
+local ModalController = {}
+
+local gui: ScreenGui
+local backdrop: TextButton
+local frame: Frame
+local titleLabel: TextLabel
+local bodyContainer: Frame
+local closeButton: TextButton
+
+local isOpen = false
+
+--==========================================================================
+-- Shell
+--==========================================================================
+
+local function build()
+	gui = Widgets.new("ScreenGui", {
+		Name = "DollysHomeModal",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 25,
+		Enabled = false,
+		Parent = player:WaitForChild("PlayerGui"),
+	}) :: ScreenGui
+
+	backdrop = Widgets.new("TextButton", {
+		Name = "Backdrop",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Theme.Colour.Backdrop,
+		BackgroundTransparency = 0.4,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = gui,
+	}) :: TextButton
+
+	frame = Widgets.panel({
+		Name = "Frame",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(0, 560, 0, 380),
+		BackgroundTransparency = 0.02,
+		Parent = gui,
+	})
+	Widgets.padding(Theme.Padding.Loose).Parent = frame
+
+	titleLabel = Widgets.label("", {
+		Size = UDim2.new(1, -40, 0, 28),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Title,
+		TextColor3 = Theme.Colour.Gold,
+		Parent = frame,
+	})
+
+	closeButton = Widgets.button("✕", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.fromOffset(32, 32),
+		BackgroundColor3 = Theme.Colour.PanelSunken,
+		TextSize = Theme.TextSize.Body,
+		Parent = frame,
+	})
+
+	bodyContainer = Widgets.new("Frame", {
+		Name = "Body",
+		Position = UDim2.new(0, 0, 0, 40),
+		Size = UDim2.new(1, 0, 1, -40),
+		BackgroundTransparency = 1,
+		Parent = frame,
+	}) :: Frame
+
+	closeButton.MouseButton1Click:Connect(function()
+		ModalController.close()
+	end)
+	backdrop.MouseButton1Click:Connect(function()
+		ModalController.close()
+	end)
+end
+
+local function openShell(title: string, height: number)
+	bodyContainer:ClearAllChildren()
+	titleLabel.Text = title
+	frame.Size = UDim2.new(0, 560, 0, height)
+	gui.Enabled = true
+	isOpen = true
+
+	frame.Position = UDim2.new(0.5, 0, 0.54, 0)
+	backdrop.BackgroundTransparency = 1
+	TweenService:Create(backdrop, Theme.Tween.Fast, { BackgroundTransparency = 0.4 }):Play()
+	TweenService:Create(frame, Theme.Tween.Normal, { Position = UDim2.new(0.5, 0, 0.5, 0) }):Play()
+end
+
+function ModalController.close()
+	if not isOpen then
+		return
+	end
+	isOpen = false
+	gui.Enabled = false
+	bodyContainer:ClearAllChildren()
+end
+
+function ModalController.isOpen(): boolean
+	return isOpen
+end
+
+--==========================================================================
+-- Lore notes
+--==========================================================================
+
+function ModalController.showLoreNote(payload: any)
+	openShell(payload.Title or "A scrap of paper", 340)
+
+	Widgets.label(payload.Author and `-- {payload.Author}` or "", {
+		Size = UDim2.new(1, 0, 0, 20),
+		Font = Theme.Font.Body,
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.TextFaint,
+		Parent = bodyContainer,
+	})
+
+	local body = Widgets.label(payload.Body or "", {
+		Position = UDim2.new(0, 0, 0, 28),
+		Size = UDim2.new(1, 0, 1, -70),
+		Font = Theme.Font.Flavour,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = Theme.Colour.Bone,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		LineHeight = 1.3,
+		Parent = bodyContainer,
+	})
+	body.RichText = false
+
+	local dismiss = Widgets.button("Put it back", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, 0),
+		Size = UDim2.new(0, 180, 0, 36),
+		Parent = bodyContainer,
+	})
+	dismiss.MouseButton1Click:Connect(ModalController.close)
+end
+
+--==========================================================================
+-- Grandfather clock
+--==========================================================================
+
+--[[
+	Hour and minute pickers rather than draggable hands.
+
+	Dragging a clock hand is charming on desktop and unusable on a phone, and
+	the tension here should come from standing still in a dark dining room for
+	eight seconds, not from fighting a touch target.
+]]
+function ModalController.showClock(payload: any)
+	local targetHour = payload.TargetHour or 12
+	local targetMinute = payload.TargetMinute or 0
+
+	openShell("The Grandfather Clock", 400)
+
+	Widgets.label(
+		`It stopped at the hour she died. Set the hands to {string.format("%d:%02d", targetHour, targetMinute)}.`,
+		{
+			Size = UDim2.new(1, 0, 0, 36),
+			Font = Theme.Font.Flavour,
+			TextSize = Theme.TextSize.Small,
+			TextColor3 = Theme.Colour.Bone,
+			TextWrapped = true,
+			Parent = bodyContainer,
+		}
+	)
+
+	local selectedHour = 12
+	local selectedMinute = 0
+
+	local readout = Widgets.label("12:00", {
+		Position = UDim2.new(0, 0, 0, 40),
+		Size = UDim2.new(1, 0, 0, 42),
+		Font = Theme.Font.Numeric,
+		TextSize = 36,
+		TextColor3 = Theme.Colour.Gold,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = bodyContainer,
+	})
+
+	local function refresh()
+		readout.Text = string.format("%d:%02d", selectedHour, selectedMinute)
+	end
+
+	--- A row of small selector buttons. `format` matters: minutes need "%02d"
+	--- so five past reads as :05 rather than :5.
+	local function pickerRow(caption: string, y: number, values: { number }, format: string, onPick: (number) -> ())
+		Widgets.label(caption, {
+			Position = UDim2.new(0, 0, 0, y),
+			Size = UDim2.new(1, 0, 0, 16),
+			Font = Theme.Font.Heading,
+			TextSize = Theme.TextSize.Tiny,
+			TextColor3 = Theme.Colour.TextDim,
+			Parent = bodyContainer,
+		})
+
+		local row = Widgets.new("Frame", {
+			Position = UDim2.new(0, 0, 0, y + 18),
+			Size = UDim2.new(1, 0, 0, 30),
+			BackgroundTransparency = 1,
+			Parent = bodyContainer,
+		})
+
+		local buttons: { TextButton } = {}
+		local width = 1 / #values
+
+		for index, value in values do
+			local button = Widgets.button(string.format(format, value), {
+				Position = UDim2.new(width * (index - 1), 2, 0, 0),
+				Size = UDim2.new(width, -4, 1, 0),
+				BackgroundColor3 = Theme.Colour.PanelSunken,
+				TextSize = Theme.TextSize.Small,
+				Parent = row,
+			})
+			buttons[index] = button
+
+			button.MouseButton1Click:Connect(function()
+				onPick(value)
+				for otherIndex, other in buttons do
+					other.BackgroundColor3 = otherIndex == index and Theme.Colour.PanelRaised
+						or Theme.Colour.PanelSunken
+				end
+				refresh()
+			end)
+		end
+	end
+
+	local hours = {}
+	for hour = 1, 12 do
+		table.insert(hours, hour)
+	end
+	local minutes = {}
+	for step = 0, 11 do
+		table.insert(minutes, step * 5)
+	end
+
+	pickerRow("HOUR", 92, hours, "%d", function(value)
+		selectedHour = value
+	end)
+	pickerRow("MINUTE", 148, minutes, "%02d", function(value)
+		selectedMinute = value
+	end)
+
+	Widgets.label(
+		"It will chime when you get it right. Everything in the house will hear it.",
+		{
+			Position = UDim2.new(0, 0, 0, 208),
+			Size = UDim2.new(1, 0, 0, 30),
+			Font = Theme.Font.Flavour,
+			TextSize = Theme.TextSize.Tiny,
+			TextColor3 = Theme.Colour.CrimsonBright,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Parent = bodyContainer,
+		}
+	)
+
+	local confirm = Widgets.button("Set the hands", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, 0),
+		Size = UDim2.new(0, 200, 0, 38),
+		BackgroundColor3 = Theme.Colour.PanelRaised,
+		Parent = bodyContainer,
+	})
+	confirm.MouseButton1Click:Connect(function()
+		Net.Events.SubmitClock:FireServer(selectedHour, selectedMinute)
+		ModalController.close()
+	end)
+
+	refresh()
+end
+
+--==========================================================================
+-- Ava
+--==========================================================================
+
+function ModalController.showAva(question: any)
+	openShell("Ava", 360)
+
+	Widgets.label(question.Text or "", {
+		Size = UDim2.new(1, 0, 0, 96),
+		Font = Theme.Font.Flavour,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = Theme.Colour.Ghost,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		LineHeight = 1.3,
+		Parent = bodyContainer,
+	})
+
+	local list = Widgets.new("Frame", {
+		Position = UDim2.new(0, 0, 0, 104),
+		Size = UDim2.new(1, 0, 1, -104),
+		BackgroundTransparency = 1,
+		Parent = bodyContainer,
+	})
+	Widgets.list(Enum.FillDirection.Vertical, 8).Parent = list
+
+	for index, option in question.Options or {} do
+		local button = Widgets.button(option.Text, {
+			Size = UDim2.new(1, 0, 0, 42),
+			BackgroundColor3 = Theme.Colour.PanelSunken,
+			TextSize = Theme.TextSize.Small,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = index,
+			Parent = list,
+		})
+		Widgets.padding(Theme.Padding.Normal, { Top = 0, Bottom = 0 }).Parent = button
+
+		button.MouseButton1Click:Connect(function()
+			Net.Events.AvaRespond:FireServer(question.Id, option.Id)
+			-- She never argues with the answer.
+			bodyContainer:ClearAllChildren()
+			Widgets.label("She looks at you for a long moment, and says nothing at all.", {
+				Size = UDim2.new(1, 0, 1, -50),
+				Font = Theme.Font.Flavour,
+				TextSize = Theme.TextSize.Body,
+				TextColor3 = Theme.Colour.Ghost,
+				TextWrapped = true,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				Parent = bodyContainer,
+			})
+			task.delay(3, ModalController.close)
+		end)
+	end
+end
+
+--==========================================================================
+-- Shop
+--==========================================================================
+
+local function buildShopRow(item: any, owned: boolean, coins: number, parent: Instance, layoutOrder: number)
+	local row = Widgets.panel({
+		Size = UDim2.new(1, -8, 0, 60),
+		BackgroundColor3 = Theme.Colour.PanelSunken,
+		BackgroundTransparency = 0.15,
+		LayoutOrder = layoutOrder,
+		Parent = parent,
+	})
+	Widgets.padding(Theme.Padding.Normal, { Top = 8, Bottom = 8 }).Parent = row
+
+	local accent = item.Colour or Theme.Colour.Text
+	if item.Rarity then
+		accent = Theme.rarityColour(item.Rarity)
+	end
+
+	Widgets.label(item.Name, {
+		Size = UDim2.new(1, -140, 0, 20),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = accent,
+		Parent = row,
+	})
+
+	Widgets.label(item.Description or "", {
+		Position = UDim2.new(0, 0, 0, 22),
+		Size = UDim2.new(1, -140, 0, 22),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextDim,
+		TextWrapped = true,
+		Parent = row,
+	})
+
+	local affordable = coins >= item.Cost
+	local label = owned and "Owned" or `{item.Cost} coins`
+
+	local button = Widgets.button(label, {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0, 120, 0, 34),
+		BackgroundColor3 = owned and Theme.Colour.PanelSunken or Theme.Colour.PanelRaised,
+		TextColor3 = owned and Theme.Colour.TextFaint
+			or (affordable and Theme.Colour.Gold or Theme.Colour.TextFaint),
+		TextSize = Theme.TextSize.Small,
+		Parent = row,
+	})
+
+	if not owned then
+		button.MouseButton1Click:Connect(function()
+			Net.Events.Purchase:FireServer(item.Id)
+			task.delay(0.3, function()
+				if isOpen then
+					ModalController.showShop()
+				end
+			end)
+		end)
+	end
+end
+
+function ModalController.showShop()
+	local ok, data = pcall(function()
+		return Net.Functions.GetProfile:InvokeServer()
+	end)
+
+	if not ok or not data or not data.Profile then
+		openShell("Peddler's Cart", 200)
+		Widgets.label("The peddler isn't here yet. Try again in a moment.", {
+			Size = UDim2.new(1, 0, 1, 0),
+			TextColor3 = Theme.Colour.TextDim,
+			TextWrapped = true,
+			Parent = bodyContainer,
+		})
+		return
+	end
+
+	local profile = data.Profile
+	local catalogue = data.Catalogue
+
+	openShell("Peddler's Cart", 460)
+
+	Widgets.label(`Your coins: {profile.Coins}`, {
+		Size = UDim2.new(1, 0, 0, 22),
+		Font = Theme.Font.Numeric,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = Theme.Colour.Gold,
+		Parent = bodyContainer,
+	})
+
+	local scroll = Widgets.new("ScrollingFrame", {
+		Position = UDim2.new(0, 0, 0, 28),
+		Size = UDim2.new(1, 0, 1, -28),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = Theme.Colour.Divider,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = bodyContainer,
+	})
+	Widgets.list(Enum.FillDirection.Vertical, 6).Parent = scroll
+
+	local order = 0
+
+	local function heading(text: string)
+		order += 1
+		Widgets.label(text, {
+			Size = UDim2.new(1, 0, 0, 22),
+			Font = Theme.Font.Heading,
+			TextSize = Theme.TextSize.Small,
+			TextColor3 = Theme.Colour.TextDim,
+			LayoutOrder = order,
+			Parent = scroll,
+		})
+	end
+
+	heading("STAKES")
+	for _, item in catalogue.Stakes or {} do
+		order += 1
+		buildShopRow(item, profile.OwnedStakes[item.Id] == true, profile.Coins, scroll, order)
+	end
+
+	heading("CONSUMABLES")
+	for _, item in catalogue.Consumables or {} do
+		order += 1
+		local held = profile.Inventory[item.Id] or 0
+		local copy = table.clone(item)
+		if held > 0 then
+			copy.Description = `{item.Description}  (you have {held})`
+		end
+		buildShopRow(copy, false, profile.Coins, scroll, order)
+	end
+
+	heading("EQUIPPED")
+	order += 1
+	local equipRow = Widgets.new("Frame", {
+		Size = UDim2.new(1, -8, 0, 40),
+		BackgroundTransparency = 1,
+		LayoutOrder = order,
+		Parent = scroll,
+	})
+	Widgets.list(Enum.FillDirection.Horizontal, 6).Parent = equipRow
+
+	for _, tier in Config.Stakes.Tiers do
+		if profile.OwnedStakes[tier.Id] then
+			local isEquipped = profile.EquippedStake == tier.Id
+			local button = Widgets.button(tier.Id, {
+				Size = UDim2.new(0, 118, 1, 0),
+				BackgroundColor3 = isEquipped and Theme.Colour.PanelRaised or Theme.Colour.PanelSunken,
+				TextColor3 = isEquipped and Theme.rarityColour(tier.Id) or Theme.Colour.TextDim,
+				TextSize = Theme.TextSize.Small,
+				Parent = equipRow,
+			})
+			button.MouseButton1Click:Connect(function()
+				Net.Events.EquipStake:FireServer(tier.Id)
+				task.delay(0.25, function()
+					if isOpen then
+						ModalController.showShop()
+					end
+				end)
+			end)
+		end
+	end
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function ModalController.start()
+	build()
+
+	Net.Events.LoreNoteRead.OnClientEvent:Connect(function(payload)
+		ModalController.showLoreNote(payload)
+	end)
+
+	Net.Events.AvaDialogue.OnClientEvent:Connect(function(question)
+		ModalController.showAva(question)
+	end)
+
+	Net.Events.Announce.OnClientEvent:Connect(function(payload)
+		if type(payload) ~= "table" then
+			return
+		end
+		if payload.Kind == "ClockMinigame" then
+			ModalController.showClock(payload)
+		elseif payload.Kind == "OpenShop" then
+			ModalController.showShop()
+		end
+	end)
+end
+
+return ModalController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX42">
+				<Properties>
+					<string name="Name">ResultsController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	ResultsController.luau
+	--------------------------------------------------------------------------
+	The end-of-round screen, built on the Murder Mystery 2 structure the design
+	document asks for: a dimmed but still visible map, a banner that lands
+	first, then the ranked players, then the payouts counting up.
+
+	The sequencing matters more than any single element. Everything arriving at
+	once reads as a wall of numbers; staggered by a couple of hundred
+	milliseconds it reads as a result being announced.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Net = require(Shared.Net)
+local StateKeys = require(Shared.StateKeys)
+local Util = require(Shared.Util)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+local Widgets = require(script.Parent.Parent.UI.Widgets)
+
+local player = Players.LocalPlayer
+
+local ResultsController = {}
+
+local gui: ScreenGui
+local backdrop: Frame
+local banner: TextLabel
+local subtitle: TextLabel
+local rowContainer: ScrollingFrame
+local footer: TextLabel
+
+local currentEndsAt = 0
+local thumbnailCache: { [number]: string } = {}
+
+--==========================================================================
+-- Avatars
+--==========================================================================
+
+--- Roblox's headshot endpoint, cached per user for the session. Falls back to
+--- an empty image rather than erroring if the request fails.
+local function getThumbnail(userId: number): string
+	if thumbnailCache[userId] then
+		return thumbnailCache[userId]
+	end
+	local ok, content = pcall(function()
+		return Players:GetUserThumbnailAsync(
+			userId,
+			Enum.ThumbnailType.HeadShot,
+			Enum.ThumbnailSize.Size100x100
+		)
+	end)
+	local result = ok and content or ""
+	thumbnailCache[userId] = result
+	return result
+end
+
+--==========================================================================
+-- Construction
+--==========================================================================
+
+local function build()
+	gui = Widgets.new("ScreenGui", {
+		Name = "DollysHomeResults",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 20,
+		Enabled = false,
+		Parent = player:WaitForChild("PlayerGui"),
+	}) :: ScreenGui
+
+	-- Dimmed, not opaque: you can still see where the bodies fell.
+	backdrop = Widgets.new("Frame", {
+		Name = "Backdrop",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Theme.Colour.Backdrop,
+		BackgroundTransparency = 0.35,
+		BorderSizePixel = 0,
+		Parent = gui,
+	}) :: Frame
+
+	Widgets.new("ImageLabel", {
+		Name = "Vignette",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Image = "rbxassetid://5107152351",
+		ImageColor3 = Color3.new(0, 0, 0),
+		ImageTransparency = 0.35,
+		ScaleType = Enum.ScaleType.Stretch,
+		Parent = backdrop,
+	})
+
+	banner = Widgets.outlinedLabel("VICTORY", {
+		Name = "Banner",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0.06, 0),
+		Size = UDim2.new(0, 700, 0, 76),
+		Font = Theme.Font.Display,
+		TextSize = Theme.TextSize.Display,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Theme.Colour.MossBright,
+		Parent = gui,
+	})
+
+	subtitle = Widgets.outlinedLabel("", {
+		Name = "Subtitle",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0.06, 78),
+		Size = UDim2.new(0, 700, 0, 22),
+		Font = Theme.Font.Flavour,
+		TextSize = Theme.TextSize.Body,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Theme.Colour.Bone,
+		Parent = gui,
+	})
+
+	local panel = Widgets.panel({
+		Name = "Rankings",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.56, 0),
+		Size = UDim2.new(0, 620, 0, 380),
+		BackgroundTransparency = 0.1,
+		Parent = gui,
+	})
+	Widgets.padding(Theme.Padding.Normal).Parent = panel
+
+	Widgets.label("PLAYER RANKINGS", {
+		Size = UDim2.new(1, 0, 0, 20),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.Gold,
+		Parent = panel,
+	})
+
+	rowContainer = Widgets.new("ScrollingFrame", {
+		Name = "Rows",
+		Position = UDim2.new(0, 0, 0, 26),
+		Size = UDim2.new(1, 0, 1, -26),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = Theme.Colour.Divider,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = panel,
+	}) :: ScrollingFrame
+	Widgets.list(Enum.FillDirection.Vertical, 6).Parent = rowContainer
+
+	footer = Widgets.outlinedLabel("", {
+		Name = "Footer",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 0.96, 0),
+		Size = UDim2.new(0, 500, 0, 26),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Body,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Theme.Colour.TextDim,
+		Parent = gui,
+	})
+end
+
+--==========================================================================
+-- Rows
+--==========================================================================
+
+local function buildRow(result: any, index: number)
+	local isYou = result.UserId == player.UserId
+
+	local row = Widgets.panel({
+		Name = `Rank{index}`,
+		Size = UDim2.new(1, -8, 0, 56),
+		BackgroundColor3 = isYou and Theme.Colour.PanelRaised or Theme.Colour.PanelSunken,
+		BackgroundTransparency = 0.2,
+		LayoutOrder = index,
+		Parent = rowContainer,
+	})
+	Widgets.padding(Theme.Padding.Tight, { Left = 10, Right = 10 }).Parent = row
+
+	if isYou then
+		local stroke = row:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Color = Theme.Colour.Gold
+			stroke.Transparency = 0
+		end
+	end
+
+	Widgets.label(`#{index}`, {
+		Size = UDim2.new(0, 34, 1, 0),
+		Font = Theme.Font.Numeric,
+		TextSize = Theme.TextSize.Heading,
+		TextColor3 = result.IsTopPerformer and Theme.Colour.Gold or Theme.Colour.TextDim,
+		Parent = row,
+	})
+
+	local avatar = Widgets.new("ImageLabel", {
+		Position = UDim2.new(0, 38, 0.5, -20),
+		Size = UDim2.fromOffset(40, 40),
+		BackgroundColor3 = Theme.Colour.Backdrop,
+		BorderSizePixel = 0,
+		Image = "",
+		-- Eliminated players are desaturated, as in the reference screens.
+		ImageColor3 = result.Eliminated and Color3.fromRGB(120, 110, 110) or Color3.new(1, 1, 1),
+		Parent = row,
+	})
+	Widgets.corner(UDim.new(1, 0)).Parent = avatar
+
+	task.spawn(function()
+		avatar.Image = getThumbnail(result.UserId)
+	end)
+
+	local nameLabel = Widgets.label(result.DisplayName, {
+		Position = UDim2.new(0, 86, 0, 8),
+		Size = UDim2.new(1, -240, 0, 20),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = isYou and Theme.Colour.Gold or Theme.Colour.Text,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = row,
+	})
+	if result.Eliminated then
+		nameLabel.TextColor3 = Theme.Colour.TextFaint
+	end
+
+	Widgets.label(`Tasks {result.Tasks}     Revives {result.Revives}`, {
+		Position = UDim2.new(0, 86, 0, 28),
+		Size = UDim2.new(1, -240, 0, 18),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextDim,
+		Parent = row,
+	})
+
+	local coinLabel = Widgets.label("0", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 8),
+		Size = UDim2.new(0, 120, 0, 22),
+		Font = Theme.Font.Numeric,
+		TextSize = Theme.TextSize.Heading,
+		TextColor3 = Theme.Colour.Gold,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Parent = row,
+	})
+
+	local tagText = result.Eliminated and "Eliminated" or "Survived"
+	Widgets.label(tagText, {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 30),
+		Size = UDim2.new(0, 120, 0, 16),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = result.Eliminated and Theme.Colour.Crimson or Theme.Colour.MossBright,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Parent = row,
+	})
+
+	if result.IsTopPerformer then
+		Widgets.label("★", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(0, 82, 0.5, 0),
+			Size = UDim2.fromOffset(18, 18),
+			TextSize = 16,
+			TextColor3 = Theme.Colour.Gold,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Parent = row,
+		})
+	end
+
+	-- Slide in, then count the coins up.
+	row.Position = UDim2.new(0, 40, 0, 0)
+	row.BackgroundTransparency = 1
+	task.delay(0.06 * index, function()
+		if not row.Parent then
+			return
+		end
+		TweenService:Create(row, Theme.Tween.Normal, { BackgroundTransparency = 0.2 }):Play()
+		Widgets.countUp(coinLabel, 0, result.Coins, 0.8, function(value)
+			return `+{math.floor(value)}`
+		end)
+	end)
+end
+
+--==========================================================================
+-- Show / hide
+--==========================================================================
+
+function ResultsController.show(payload: any)
+	rowContainer:ClearAllChildren()
+	Widgets.list(Enum.FillDirection.Vertical, 6).Parent = rowContainer
+
+	local victory = payload.Victory == true
+	currentEndsAt = payload.EndsAt or (Util.now() + 15)
+
+	banner.Text = victory and "YOU GOT OUT" or "THE HOUSE KEPT YOU"
+	banner.TextColor3 = victory and Theme.Colour.MossBright or Theme.Colour.CrimsonBright
+
+	local killers = payload.Killers and #payload.Killers > 0 and table.concat(payload.Killers, " and ") or "the family"
+	subtitle.Text = victory and `Every task finished. {killers} went hungry.`
+		or `{killers} is still down there, waiting for the next ones.`
+
+	gui.Enabled = true
+
+	-- Banner first, rows after.
+	backdrop.BackgroundTransparency = 1
+	banner.TextTransparency = 1
+	subtitle.TextTransparency = 1
+	banner.Position = UDim2.new(0.5, 0, 0.02, 0)
+
+	TweenService:Create(backdrop, Theme.Tween.Slow, { BackgroundTransparency = 0.35 }):Play()
+	TweenService:Create(banner, Theme.Tween.Bounce, { Position = UDim2.new(0.5, 0, 0.06, 0) }):Play()
+	TweenService:Create(banner, Theme.Tween.Normal, { TextTransparency = 0 }):Play()
+	task.delay(0.25, function()
+		TweenService:Create(subtitle, Theme.Tween.Normal, { TextTransparency = 0 }):Play()
+	end)
+
+	task.delay(0.4, function()
+		for index, result in payload.Results or {} do
+			buildRow(result, index)
+		end
+	end)
+end
+
+function ResultsController.hide()
+	if not gui.Enabled then
+		return
+	end
+	TweenService:Create(backdrop, Theme.Tween.Normal, { BackgroundTransparency = 1 }):Play()
+	TweenService:Create(banner, Theme.Tween.Normal, { TextTransparency = 1 }):Play()
+	TweenService:Create(subtitle, Theme.Tween.Normal, { TextTransparency = 1 }):Play()
+	task.wait(0.3)
+	gui.Enabled = false
+	rowContainer:ClearAllChildren()
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function ResultsController.start()
+	build()
+
+	Net.Events.RoundResults.OnClientEvent:Connect(function(payload)
+		local ok, err = pcall(ResultsController.show, payload)
+		if not ok then
+			warn(`[ResultsController] {err}`)
+		end
+	end)
+
+	Net.getState():GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(function()
+		local phase = Net.getStateValue(StateKeys.Game.Phase, "")
+		if phase ~= StateKeys.Phase.Results then
+			task.spawn(ResultsController.hide)
+		end
+	end)
+
+	RunService.Heartbeat:Connect(function()
+		if not gui.Enabled then
+			return
+		end
+		local remaining = math.max(0, currentEndsAt - Util.now())
+		footer.Text = `Returning to the lobby in {math.ceil(remaining)}`
+	end)
+end
+
+return ResultsController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX43">
+				<Properties>
+					<string name="Name">SpectateController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	SpectateController.luau
+	--------------------------------------------------------------------------
+	After you're eliminated -- or if you joined while a round was already
+	running -- the camera follows whoever is still alive.
+
+	Deliberately no chat bridge back to the living. "Ghosting" (dead players
+	calling out killer positions in voice or chat) ruins the tension the whole
+	noise system exists to create, and the design document calls it out
+	specifically.
+	--------------------------------------------------------------------------
+]]
+
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Net = require(Shared.Net)
+local StateKeys = require(Shared.StateKeys)
+local Util = require(Shared.Util)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+local Widgets = require(script.Parent.Parent.UI.Widgets)
+
+local player = Players.LocalPlayer
+
+local SpectateController = {}
+
+local ACTION_NEXT = "DollysHome_SpectateNext"
+local ACTION_PREV = "DollysHome_SpectatePrev"
+
+local gui: ScreenGui
+local nameLabel: TextLabel
+
+local spectating = false
+local targetIndex = 1
+local currentTarget: Player? = nil
+
+--==========================================================================
+-- Targets
+--==========================================================================
+
+local function getTargets(): { Player }
+	local out = {}
+	for _, other in Players:GetPlayers() do
+		if other == player then
+			continue
+		end
+		if other:GetAttribute(StateKeys.Player.Alive) == true or other:GetAttribute(StateKeys.Player.Injured) == true then
+			if Util.getPosition(other) then
+				table.insert(out, other)
+			end
+		end
+	end
+	table.sort(out, function(a, b)
+		return a.UserId < b.UserId
+	end)
+	return out
+end
+
+local function cycle(delta: number)
+	local targets = getTargets()
+	if #targets == 0 then
+		return
+	end
+	targetIndex = ((targetIndex - 1 + delta) % #targets) + 1
+	currentTarget = targets[targetIndex]
+end
+
+--==========================================================================
+-- Camera
+--==========================================================================
+
+local function beginSpectating()
+	if spectating then
+		return
+	end
+	spectating = true
+	gui.Enabled = true
+
+	local camera = Workspace.CurrentCamera
+	if camera then
+		camera.CameraType = Enum.CameraType.Scriptable
+	end
+
+	targetIndex = 1
+	cycle(0)
+
+	ContextActionService:BindAction(ACTION_NEXT, function(_a, state)
+		if state == Enum.UserInputState.Begin then
+			cycle(1)
+		end
+		return Enum.ContextActionResult.Sink
+	end, UserInputService.TouchEnabled, Enum.KeyCode.Tab, Enum.KeyCode.E, Enum.KeyCode.ButtonR1)
+	ContextActionService:SetTitle(ACTION_NEXT, "NEXT")
+
+	ContextActionService:BindAction(ACTION_PREV, function(_a, state)
+		if state == Enum.UserInputState.Begin then
+			cycle(-1)
+		end
+		return Enum.ContextActionResult.Sink
+	end, UserInputService.TouchEnabled, Enum.KeyCode.Q, Enum.KeyCode.ButtonL1)
+	ContextActionService:SetTitle(ACTION_PREV, "PREV")
+end
+
+local function endSpectating()
+	if not spectating then
+		return
+	end
+	spectating = false
+	gui.Enabled = false
+	currentTarget = nil
+
+	ContextActionService:UnbindAction(ACTION_NEXT)
+	ContextActionService:UnbindAction(ACTION_PREV)
+
+	local camera = Workspace.CurrentCamera
+	local character = player.Character
+	if camera then
+		camera.CameraType = Enum.CameraType.Custom
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				camera.CameraSubject = humanoid
+			end
+		end
+	end
+end
+
+local function updateCamera(dt: number)
+	if not spectating then
+		return
+	end
+
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return
+	end
+
+	-- The target might have been eliminated since we picked them.
+	if not currentTarget or not currentTarget.Parent or not Util.getPosition(currentTarget) then
+		cycle(1)
+	end
+
+	local target = currentTarget
+	if not target then
+		nameLabel.Text = "Nobody left to watch."
+		return
+	end
+
+	local position = Util.getPosition(target)
+	if not position then
+		return
+	end
+
+	-- Trail behind and above, easing in so switching targets isn't a snap cut.
+	local goal = CFrame.lookAt(position + Vector3.new(0, 9, 14), position)
+	camera.CFrame = camera.CFrame:Lerp(goal, math.clamp(dt * 6, 0, 1))
+
+	local injuredNote = target:GetAttribute(StateKeys.Player.Injured) == true and "  (down)" or ""
+	nameLabel.Text = `Watching {target.DisplayName}{injuredNote}    -    Tab / E to cycle`
+end
+
+--==========================================================================
+-- Construction
+--==========================================================================
+
+local function build()
+	gui = Widgets.new("ScreenGui", {
+		Name = "DollysHomeSpectate",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 8,
+		Enabled = false,
+		Parent = player:WaitForChild("PlayerGui"),
+	}) :: ScreenGui
+
+	local panel = Widgets.panel({
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -60),
+		Size = UDim2.new(0, 460, 0, 40),
+		BackgroundTransparency = 0.25,
+		Parent = gui,
+	})
+	Widgets.padding(Theme.Padding.Tight).Parent = panel
+
+	nameLabel = Widgets.label("", {
+		Size = UDim2.fromScale(1, 1),
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = panel,
+	})
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+local function evaluate()
+	local phase = Net.getStateValue(StateKeys.Game.Phase, "")
+	local shouldSpectate = phase == StateKeys.Phase.Active
+		and player:GetAttribute(StateKeys.Player.Spectating) == true
+		and #getTargets() > 0
+
+	if shouldSpectate then
+		beginSpectating()
+	else
+		endSpectating()
+	end
+end
+
+function SpectateController.start()
+	build()
+
+	player:GetAttributeChangedSignal(StateKeys.Player.Spectating):Connect(evaluate)
+	player:GetAttributeChangedSignal(StateKeys.Player.Eliminated):Connect(evaluate)
+	Net.getState():GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(evaluate)
+
+	player.CharacterAdded:Connect(function()
+		task.wait(0.5)
+		evaluate()
+	end)
+
+	RunService.RenderStepped:Connect(function(dt)
+		local ok = pcall(updateCamera, dt)
+		if not ok then
+			endSpectating()
+		end
+	end)
+
+	evaluate()
+end
+
+return SpectateController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX44">
+				<Properties>
+					<string name="Name">VoteController</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	VoteController.luau
+	--------------------------------------------------------------------------
+	The lobby map vote.
+
+	Counts come straight off the replicated Votes attributes, so every client
+	sees the tally shift the instant anyone clicks -- no polling, no remote per
+	vote.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Net = require(Shared.Net)
+local StateKeys = require(Shared.StateKeys)
+local Util = require(Shared.Util)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+local Widgets = require(script.Parent.Parent.UI.Widgets)
+
+local player = Players.LocalPlayer
+
+local VoteController = {}
+
+local gui: ScreenGui
+local panel: Frame
+local timerLabel: TextLabel
+
+type MapCard = {
+	Button: TextButton,
+	CountLabel: TextLabel,
+	Highlight: UIStroke,
+	MapId: string,
+}
+
+local cards: { MapCard } = {}
+local myVote: string? = nil
+
+--==========================================================================
+-- Construction
+--==========================================================================
+
+local function buildCard(mapInfo: any, index: number, total: number, parent: Instance): MapCard
+	local width = 1 / total
+
+	local button = Widgets.button("", {
+		Name = mapInfo.Id,
+		Size = UDim2.new(width, -8, 1, 0),
+		Position = UDim2.new(width * (index - 1), 4, 0, 0),
+		BackgroundColor3 = Theme.Colour.PanelSunken,
+		Parent = parent,
+	})
+
+	local highlight = button:FindFirstChildOfClass("UIStroke") :: UIStroke
+	highlight.Color = Theme.Colour.Divider
+	highlight.Thickness = 2
+
+	Widgets.label(mapInfo.Name, {
+		Position = UDim2.new(0, 12, 0, 12),
+		Size = UDim2.new(1, -24, 0, 22),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Heading,
+		TextColor3 = Theme.Colour.Text,
+		Parent = button,
+	})
+
+	Widgets.label(mapInfo.Description, {
+		Position = UDim2.new(0, 12, 0, 36),
+		Size = UDim2.new(1, -24, 0, 34),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextFaint,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Parent = button,
+	})
+
+	local countLabel = Widgets.label("0 votes", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 12, 1, -10),
+		Size = UDim2.new(1, -24, 0, 18),
+		Font = Theme.Font.Numeric,
+		TextSize = Theme.TextSize.Small,
+		TextColor3 = Theme.Colour.Gold,
+		Parent = button,
+	})
+
+	local card: MapCard = {
+		Button = button,
+		CountLabel = countLabel,
+		Highlight = highlight,
+		MapId = mapInfo.Id,
+	}
+
+	button.MouseButton1Click:Connect(function()
+		if not Net.getStateValue(StateKeys.Game.VotingOpen, false) then
+			return
+		end
+		myVote = mapInfo.Id
+		Net.Events.CastVote:FireServer(mapInfo.Id)
+		VoteController.refresh()
+	end)
+
+	return card
+end
+
+local function build()
+	gui = Widgets.new("ScreenGui", {
+		Name = "DollysHomeVote",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 11,
+		Enabled = false,
+		Parent = player:WaitForChild("PlayerGui"),
+	}) :: ScreenGui
+
+	panel = Widgets.panel({
+		Name = "VotePanel",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -24),
+		Size = UDim2.new(0, 720, 0, 190),
+		BackgroundTransparency = 0.1,
+		Parent = gui,
+	})
+	Widgets.padding(Theme.Padding.Normal).Parent = panel
+
+	Widgets.label("VOTE FOR THE NEXT MAP", {
+		Size = UDim2.new(1, 0, 0, 22),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Heading,
+		TextColor3 = Theme.Colour.Gold,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = panel,
+	})
+
+	timerLabel = Widgets.label("", {
+		Position = UDim2.new(0, 0, 0, 22),
+		Size = UDim2.new(1, 0, 0, 16),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = panel,
+	})
+
+	local row = Widgets.new("Frame", {
+		Name = "Cards",
+		Position = UDim2.new(0, 0, 0, 44),
+		Size = UDim2.new(1, 0, 1, -50),
+		BackgroundTransparency = 1,
+		Parent = panel,
+	})
+
+	local maps = Config.getEnabledMaps()
+	for index, mapInfo in maps do
+		table.insert(cards, buildCard(mapInfo, index, #maps, row))
+	end
+
+	-- Maps you can't vote for yet still show, greyed out, so players can see
+	-- what's coming.
+	local disabledRow = Widgets.label("", {
+		Name = "Locked",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, 2),
+		Size = UDim2.new(1, 0, 0, 14),
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = panel,
+	})
+
+	local locked = {}
+	for _, mapInfo in Config.Maps do
+		if not mapInfo.Enabled then
+			table.insert(locked, mapInfo.Name)
+		end
+	end
+	if #locked > 0 then
+		disabledRow.Text = `Coming soon: {table.concat(locked, ", ")}`
+	end
+end
+
+--==========================================================================
+-- Updates
+--==========================================================================
+
+function VoteController.refresh()
+	local votes = Net.getVotesFolder()
+	for _, card in cards do
+		local count = (votes:GetAttribute(card.MapId) :: number?) or 0
+		card.CountLabel.Text = count == 1 and "1 vote" or `{count} votes`
+
+		local isMine = myVote == card.MapId
+		TweenService:Create(card.Highlight, Theme.Tween.Fast, {
+			Color = isMine and Theme.Colour.Gold or Theme.Colour.Divider,
+		}):Play()
+		TweenService:Create(card.Button, Theme.Tween.Fast, {
+			BackgroundColor3 = isMine and Theme.Colour.PanelRaised or Theme.Colour.PanelSunken,
+		}):Play()
+	end
+end
+
+local function updateVisibility()
+	local phase = Net.getStateValue(StateKeys.Game.Phase, "")
+	local votingOpen = Net.getStateValue(StateKeys.Game.VotingOpen, false)
+	local shouldShow = votingOpen and phase == StateKeys.Phase.Intermission
+
+	if gui.Enabled ~= shouldShow then
+		gui.Enabled = shouldShow
+		if shouldShow then
+			myVote = nil
+			VoteController.refresh()
+		end
+	end
+end
+
+--==========================================================================
+-- Lifecycle
+--==========================================================================
+
+function VoteController.start()
+	build()
+
+	local state = Net.getState()
+	state:GetAttributeChangedSignal(StateKeys.Game.VotingOpen):Connect(updateVisibility)
+	state:GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(updateVisibility)
+
+	Net.getVotesFolder().AttributeChanged:Connect(function()
+		if gui.Enabled then
+			VoteController.refresh()
+		end
+	end)
+
+	RunService.Heartbeat:Connect(function()
+		if not gui.Enabled then
+			return
+		end
+		-- Voting closes partway through the intermission, not at the end of it,
+		-- so count against the start plus the voting window rather than
+		-- PhaseEndsAt.
+		local startedAt = Net.getStateValue(StateKeys.Game.PhaseStartedAt, 0) :: number
+		local closesAt = startedAt + Config.Round.VotingSeconds
+		local remaining = math.max(0, closesAt - Util.now())
+		timerLabel.Text = `Voting closes in {math.ceil(remaining)}s`
+	end)
+
+	updateVisibility()
+	VoteController.refresh()
+end
+
+return VoteController
+]]></ProtectedString>
+				</Properties>
+			</Item>
+		</Item>
+		<Item class="Folder" referent="RBX48">
+			<Properties>
+				<string name="Name">UI</string>
+			</Properties>
+			<Item class="ModuleScript" referent="RBX46">
+				<Properties>
+					<string name="Name">Theme</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	Theme.luau
+	--------------------------------------------------------------------------
+	One place for every colour, font and spacing value the UI uses.
+
+	The palette follows the design document's Southern Gothic direction --
+	deep browns, muted greens and dusty greys, with crimson for danger, pale
+	gold for safety and a sick green for the family's eyes. The results screen
+	borrows Murder Mystery 2's structure (big banner, ranked avatars, counting
+	coins) but not its colours; a cheerful cyan VICTORY would fight everything
+	else on screen.
+	--------------------------------------------------------------------------
+]]
+
+local Theme = {}
+
+--==========================================================================
+-- Colour
+--==========================================================================
+Theme.Colour = {
+	-- Surfaces
+	Backdrop = Color3.fromRGB(10, 9, 11),
+	Panel = Color3.fromRGB(24, 21, 22),
+	PanelRaised = Color3.fromRGB(34, 30, 31),
+	PanelSunken = Color3.fromRGB(16, 14, 15),
+	Divider = Color3.fromRGB(58, 50, 48),
+
+	-- Text
+	Text = Color3.fromRGB(232, 224, 210),
+	TextDim = Color3.fromRGB(158, 148, 138),
+	TextFaint = Color3.fromRGB(104, 96, 90),
+	TextInverse = Color3.fromRGB(18, 16, 16),
+
+	-- Accents
+	Gold = Color3.fromRGB(214, 176, 102), -- safe zones, coins, highlights
+	Crimson = Color3.fromRGB(168, 38, 38), -- danger, defeat
+	CrimsonBright = Color3.fromRGB(226, 72, 62),
+	Moss = Color3.fromRGB(104, 130, 92), -- victory, the swamp
+	MossBright = Color3.fromRGB(146, 190, 128),
+	Bone = Color3.fromRGB(206, 198, 178),
+	Ghost = Color3.fromRGB(146, 190, 235), -- Robby & Benny
+
+	-- Noise meter, matching Config.Noise.Tiers
+	NoiseQuiet = Color3.fromRGB(96, 190, 118),
+	NoiseModerate = Color3.fromRGB(224, 202, 90),
+	NoiseLoud = Color3.fromRGB(232, 146, 58),
+	NoiseExtreme = Color3.fromRGB(226, 62, 58),
+
+	Health = Color3.fromRGB(196, 62, 62),
+	Stamina = Color3.fromRGB(126, 176, 216),
+}
+
+--==========================================================================
+-- Type
+--==========================================================================
+Theme.Font = {
+	Display = Enum.Font.GothamBlack, -- VICTORY / DEFEAT
+	Heading = Enum.Font.GothamBold,
+	Body = Enum.Font.GothamMedium,
+	Numeric = Enum.Font.GothamBold,
+	Flavour = Enum.Font.Merriweather, -- lore notes, Ava, killer lines
+}
+
+Theme.TextSize = {
+	Display = 56,
+	Title = 26,
+	Heading = 20,
+	Body = 16,
+	Small = 14,
+	Tiny = 12,
+}
+
+--==========================================================================
+-- Layout
+--==========================================================================
+Theme.Radius = {
+	Small = UDim.new(0, 4),
+	Medium = UDim.new(0, 8),
+	Large = UDim.new(0, 14),
+}
+
+Theme.Padding = {
+	Tight = 6,
+	Normal = 12,
+	Loose = 20,
+}
+
+--- Extra top inset so the HUD clears Roblox's own top bar on every device.
+Theme.TopBarInset = 42
+
+--==========================================================================
+-- Motion
+--==========================================================================
+Theme.Tween = {
+	Fast = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	Normal = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	Slow = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	Bounce = TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+}
+
+--==========================================================================
+-- Helpers
+--==========================================================================
+
+--- Colour for a noise tier name (as replicated on the player's NoiseTier attribute).
+function Theme.noiseColour(tierName: string): Color3
+	if tierName == "Extreme" then
+		return Theme.Colour.NoiseExtreme
+	elseif tierName == "Loud" then
+		return Theme.Colour.NoiseLoud
+	elseif tierName == "Moderate" then
+		return Theme.Colour.NoiseModerate
+	end
+	return Theme.Colour.NoiseQuiet
+end
+
+--- Human-readable label for a noise tier.
+function Theme.noiseLabel(tierName: string): string
+	if tierName == "Extreme" then
+		return "DEAFENING"
+	elseif tierName == "Loud" then
+		return "LOUD"
+	elseif tierName == "Moderate" then
+		return "CAUTION"
+	end
+	return "QUIET"
+end
+
+function Theme.rarityColour(rarity: string): Color3
+	if rarity == "Legendary" then
+		return Color3.fromRGB(240, 200, 100)
+	elseif rarity == "Rare" then
+		return Color3.fromRGB(120, 160, 220)
+	elseif rarity == "Uncommon" then
+		return Color3.fromRGB(190, 195, 205)
+	end
+	return Color3.fromRGB(150, 128, 98)
+end
+
+return Theme
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX47">
+				<Properties>
+					<string name="Name">Widgets</string>
+					<ProtectedString name="Source"><![CDATA[--!nonstrict
+--[[
+	Widgets.luau
+	--------------------------------------------------------------------------
+	A tiny declarative layer over Instance.new, plus the handful of composite
+	widgets the HUD reuses.
+
+	Building the UI in code rather than shipping .rbxmx files keeps it
+	reviewable in a diff -- you can see a colour change in a pull request
+	instead of a binary blob.
+	--------------------------------------------------------------------------
+]]
+
+local TweenService = game:GetService("TweenService")
+
+local Theme = require(script.Parent.Theme)
+
+local Widgets = {}
+
+--==========================================================================
+-- Core
+--==========================================================================
+
+--[[
+	Widgets.new("Frame", { Size = ... }, { child, child })
+
+	`props.Parent` is applied last so children exist before the instance enters
+	the tree -- one reflow instead of several.
+]]
+function Widgets.new(className: string, props: { [string]: any }?, children: { Instance }?): any
+	local instance = Instance.new(className)
+	local parent = nil
+
+	if props then
+		parent = props.Parent
+		for key, value in props do
+			if key ~= "Parent" then
+				(instance :: any)[key] = value
+			end
+		end
+	end
+
+	if children then
+		for _, child in children do
+			child.Parent = instance
+		end
+	end
+
+	if parent then
+		instance.Parent = parent
+	end
+	return instance
+end
+
+function Widgets.corner(radius: UDim?): UICorner
+	return Widgets.new("UICorner", { CornerRadius = radius or Theme.Radius.Medium })
+end
+
+function Widgets.stroke(colour: Color3?, thickness: number?, transparency: number?): UIStroke
+	return Widgets.new("UIStroke", {
+		Color = colour or Theme.Colour.Divider,
+		Thickness = thickness or 1,
+		Transparency = transparency or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	})
+end
+
+function Widgets.padding(all: number?, overrides: { [string]: number }?): UIPadding
+	local value = all or Theme.Padding.Normal
+	local padding = Widgets.new("UIPadding", {
+		PaddingTop = UDim.new(0, (overrides and overrides.Top) or value),
+		PaddingBottom = UDim.new(0, (overrides and overrides.Bottom) or value),
+		PaddingLeft = UDim.new(0, (overrides and overrides.Left) or value),
+		PaddingRight = UDim.new(0, (overrides and overrides.Right) or value),
+	})
+	return padding
+end
+
+function Widgets.list(direction: Enum.FillDirection?, gap: number?, align: Enum.HorizontalAlignment?): UIListLayout
+	return Widgets.new("UIListLayout", {
+		FillDirection = direction or Enum.FillDirection.Vertical,
+		Padding = UDim.new(0, gap or Theme.Padding.Tight),
+		HorizontalAlignment = align or Enum.HorizontalAlignment.Left,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	})
+end
+
+--==========================================================================
+-- Text
+--==========================================================================
+
+function Widgets.label(text: string, props: { [string]: any }?): TextLabel
+	local merged: { [string]: any } = {
+		Text = text,
+		BackgroundTransparency = 1,
+		Font = Theme.Font.Body,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = Theme.Colour.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Size = UDim2.new(1, 0, 0, 20),
+	}
+	if props then
+		for key, value in props do
+			merged[key] = value
+		end
+	end
+	return Widgets.new("TextLabel", merged)
+end
+
+--- A label with an outline, for text sitting over the game world.
+function Widgets.outlinedLabel(text: string, props: { [string]: any }?): TextLabel
+	local label = Widgets.label(text, props)
+	Widgets.new("UIStroke", {
+		Color = Color3.new(0, 0, 0),
+		Thickness = 2,
+		Transparency = 0.35,
+		Parent = label,
+	})
+	return label
+end
+
+--==========================================================================
+-- Containers
+--==========================================================================
+
+function Widgets.panel(props: { [string]: any }?, children: { Instance }?): Frame
+	local merged: { [string]: any } = {
+		BackgroundColor3 = Theme.Colour.Panel,
+		BackgroundTransparency = 0.12,
+		BorderSizePixel = 0,
+	}
+	if props then
+		for key, value in props do
+			merged[key] = value
+		end
+	end
+
+	local frame = Widgets.new("Frame", merged, children) :: Frame
+	Widgets.corner(Theme.Radius.Medium).Parent = frame
+	Widgets.stroke(Theme.Colour.Divider, 1, 0.4).Parent = frame
+	return frame
+end
+
+--==========================================================================
+-- Bars
+--==========================================================================
+
+export type Bar = {
+	Root: Frame,
+	Fill: Frame,
+	Label: TextLabel,
+	set: (self: Bar, alpha: number, text: string?, colour: Color3?) -> (),
+}
+
+--[[
+	A labelled progress bar. `set` tweens the fill so a noise spike reads as a
+	surge rather than a jump.
+]]
+function Widgets.bar(labelText: string, colour: Color3, props: { [string]: any }?): Bar
+	local root = Widgets.new("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 34),
+	})
+	if props then
+		for key, value in props do
+			(root :: any)[key] = value
+		end
+	end
+
+	local caption = Widgets.label(labelText, {
+		Size = UDim2.new(1, 0, 0, 14),
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Tiny,
+		TextColor3 = Theme.Colour.TextDim,
+		Parent = root,
+	})
+
+	local track = Widgets.new("Frame", {
+		Position = UDim2.new(0, 0, 0, 17),
+		Size = UDim2.new(1, 0, 0, 12),
+		BackgroundColor3 = Theme.Colour.PanelSunken,
+		BorderSizePixel = 0,
+		Parent = root,
+	}) :: Frame
+	Widgets.corner(Theme.Radius.Small).Parent = track
+
+	local fill = Widgets.new("Frame", {
+		Size = UDim2.new(0, 0, 1, 0),
+		BackgroundColor3 = colour,
+		BorderSizePixel = 0,
+		Parent = track,
+	}) :: Frame
+	Widgets.corner(Theme.Radius.Small).Parent = fill
+
+	local bar: Bar
+	bar = {
+		Root = root,
+		Fill = fill,
+		Label = caption,
+		set = function(_self, alpha: number, text: string?, newColour: Color3?)
+			local clamped = math.clamp(alpha, 0, 1)
+			TweenService:Create(fill, Theme.Tween.Fast, { Size = UDim2.new(clamped, 0, 1, 0) }):Play()
+			if newColour then
+				TweenService:Create(fill, Theme.Tween.Fast, { BackgroundColor3 = newColour }):Play()
+			end
+			if text then
+				caption.Text = text
+			end
+		end,
+	}
+	return bar
+end
+
+--==========================================================================
+-- Buttons
+--==========================================================================
+
+--- A text button with press and hover feedback wired up.
+function Widgets.button(text: string, props: { [string]: any }?): TextButton
+	local merged: { [string]: any } = {
+		Text = text,
+		Font = Theme.Font.Heading,
+		TextSize = Theme.TextSize.Body,
+		TextColor3 = Theme.Colour.Text,
+		BackgroundColor3 = Theme.Colour.PanelRaised,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Size = UDim2.new(0, 160, 0, 40),
+	}
+	if props then
+		for key, value in props do
+			merged[key] = value
+		end
+	end
+
+	local button = Widgets.new("TextButton", merged) :: TextButton
+	Widgets.corner(Theme.Radius.Medium).Parent = button
+	Widgets.stroke(Theme.Colour.Divider, 1, 0.3).Parent = button
+
+	local base = button.BackgroundColor3
+	local hover = base:Lerp(Color3.new(1, 1, 1), 0.12)
+
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, Theme.Tween.Fast, { BackgroundColor3 = hover }):Play()
+	end)
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, Theme.Tween.Fast, { BackgroundColor3 = base }):Play()
+	end)
+	button.MouseButton1Down:Connect(function()
+		TweenService:Create(button, Theme.Tween.Fast, { BackgroundTransparency = 0.25 }):Play()
+	end)
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(button, Theme.Tween.Fast, { BackgroundTransparency = 0 }):Play()
+	end)
+
+	return button
+end
+
+--==========================================================================
+-- Effects
+--==========================================================================
+
+--- Counts a number up, MM2-style. Returns immediately; runs in its own thread.
+function Widgets.countUp(label: TextLabel, from: number, to: number, duration: number, format: ((number) -> string)?)
+	task.spawn(function()
+		local start = os.clock()
+		local render = format or function(value: number)
+			return tostring(math.floor(value))
+		end
+		while true do
+			local alpha = math.min(1, (os.clock() - start) / duration)
+			-- Ease out, so it slams up then settles.
+			local eased = 1 - (1 - alpha) ^ 3
+			label.Text = render(from + (to - from) * eased)
+			if alpha >= 1 then
+				break
+			end
+			task.wait()
+		end
+		label.Text = render(to)
+	end)
+end
+
+--- Fades an instance's Transparency-ish property in from hidden.
+function Widgets.fadeIn(instance: Instance, property: string, target: number, tweenInfo: TweenInfo?)
+	local any = instance :: any
+	any[property] = 1
+	TweenService:Create(instance, tweenInfo or Theme.Tween.Normal, { [property] = target }):Play()
+end
+
+Widgets.Theme = Theme
+
+return Widgets
+]]></ProtectedString>
+				</Properties>
+			</Item>
+		</Item>
+	</Item>
+</roblox>

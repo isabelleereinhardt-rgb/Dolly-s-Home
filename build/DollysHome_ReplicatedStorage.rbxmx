@@ -1,0 +1,1701 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Item class="Folder" referent="RBX10">
+		<Properties>
+			<string name="Name">Shared</string>
+		</Properties>
+		<Item class="ModuleScript" referent="RBX1">
+			<Properties>
+				<string name="Name">Config</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	Config.luau
+	--------------------------------------------------------------------------
+	Every tunable number in Dolly's Home lives here. Nothing else should hard-code
+	a balance value -- if you want to change how the game feels, change it here.
+
+	Where the two design documents disagreed, the value used is noted with a
+	`-- DOC:` comment and explained in docs/DESIGN_DECISIONS.md.
+	--------------------------------------------------------------------------
+]]
+
+local Config = {}
+
+--==========================================================================
+-- ROUND FLOW
+--==========================================================================
+Config.Round = {
+	-- Lobby / intermission
+	IntermissionSeconds = 50,
+	VotingSeconds = 30, -- voting window inside the intermission
+	MinPlayersToStart = 1, -- set to 2+ before release; 1 makes solo testing easy
+
+	-- Start transition
+	StartupSeconds = 6,
+
+	-- The round itself
+	RoundSeconds = 600, -- 10 minutes
+
+	-- Results
+	ResultsSeconds = 15, -- DOC: doc says both 15s and 5s; 15s chosen
+	PostResultsSeconds = 5,
+}
+
+--==========================================================================
+-- PLAYER
+--==========================================================================
+Config.Player = {
+	MaxHealth = 100,
+	WalkSpeed = 16,
+	SprintSpeed = 24,
+	JumpPower = 50,
+
+	-- Sprinting drains stamina; 0 stamina forces a walk until it recovers.
+	-- Set StaminaEnabled = false for the pure design-doc behaviour (unlimited sprint).
+	StaminaEnabled = true,
+	MaxStamina = 100,
+	StaminaDrainPerSecond = 14,
+	StaminaRegenPerSecond = 9,
+	StaminaRegenDelay = 1.5,
+}
+
+--==========================================================================
+-- NOISE SYSTEM  (the heart of the stealth loop)
+--==========================================================================
+Config.Noise = {
+	Max = 100,
+
+	-- Continuous generation (per second)
+	WalkRate = 0.5,
+	SprintRate = 2.0,
+	CrouchRate = 0.15,
+
+	-- Instant spikes
+	Actions = {
+		OpenDoor = 15,
+		CollectItem = 10,
+		BreakMirror = 25,
+		BrewPotion = 40, -- applied over BrewPotionSeconds
+		AdjustClock = 50,
+		Land = 8,
+		CreakyFloor = 12,
+		EnterHidingSpot = 5,
+		Attack = 20,
+		Revive = 8,
+	},
+	BrewPotionSeconds = 10,
+
+	-- Decay (per second)
+	DecayIdle = 0.5,
+	DecayCrouched = 0.3,
+
+	-- Detection tiers. `Range` is how far a killer can hear a player sitting at
+	-- that noise level, before the killer's own hearing multiplier is applied.
+	-- Priority breaks ties when several players are audible at once.
+	Tiers = {
+		{ Name = "Quiet", Min = 0, Max = 9.999, Range = 12, Response = "Ignore", Priority = 0, Color = Color3.fromRGB(90, 220, 120) },
+		{ Name = "Moderate", Min = 10, Max = 29.999, Range = 40, Response = "Turn", Priority = 1, Color = Color3.fromRGB(240, 220, 90) },
+		{ Name = "Loud", Min = 30, Max = 49.999, Range = 60, Response = "Investigate", Priority = 2, Color = Color3.fromRGB(245, 155, 60) },
+		{ Name = "Extreme", Min = 50, Max = math.huge, Range = math.huge, Response = "Rush", Priority = 3, Color = Color3.fromRGB(235, 70, 70) },
+	},
+
+	-- How often the server recomputes noise (Hz). Higher = smoother meter, more work.
+	TickRate = 10,
+	-- Don't replicate a change smaller than this (cuts attribute churn hard).
+	ReplicateEpsilon = 0.25,
+}
+
+--==========================================================================
+-- KILLER AI
+--==========================================================================
+Config.Killer = {
+	PatrolSpeed = 16,
+
+	-- Attacking
+	AttackRange = 7,
+	AttackDamage = 55, -- two connected hits down a full-health player
+	AttackCooldown = 1.6,
+	AttackWindup = 0.35,
+
+	-- State timing
+	InvestigateMemory = 10, -- seconds spent searching a noise source before giving up
+	ChaseGiveUpSilence = 8, -- seconds of silence + no line of sight before dropping chase
+	SearchRadius = 18, -- how far the killer wanders around an investigation point
+	HidingSpotCheckChance = 0.3, -- chance to search a hiding spot while investigating
+	HidingSpotCheckChanceClose = 0.5, -- chance when the killer is right on top of it
+	HidingSpotCheckRange = 14,
+	LongHideSuspicionSeconds = 30, -- camping one spot this long makes killers suspicious
+
+	-- Health / stakes
+	RegenPerSecond = -1, -- computed below from RegenFullSeconds
+	RegenFullSeconds = 60, -- full HP bar regenerates in this many seconds
+	RegenDelayAfterHit = 5,
+
+	-- Pathfinding
+	RepathInterval = 0.6,
+	WaypointReachedDistance = 4,
+	AgentRadius = 2.5,
+	AgentHeight = 5,
+	AgentCanJump = true,
+
+	-- Vision is a *backup* sense only. Killers are blind by design; this exists
+	-- so a player standing directly in front of one for several seconds is not
+	-- completely invisible. Set Enabled = false for pure sound-only hunting.
+	Vision = {
+		Enabled = true,
+		Range = 14,
+		FieldOfViewDegrees = 70,
+	},
+
+	-- How many killers spawn each round
+	SpawnChanceTwo = 0.3, -- DOC: 70% one killer, 30% two
+	MaxActive = 2,
+	LorePairs = { { "Bob", "Barbara" } }, -- thematic pairings that get a bonus roll
+	LorePairChance = 0.35,
+}
+
+--==========================================================================
+-- COMBAT (stakes)
+--==========================================================================
+-- DOC: the two documents give two different stake tables. The later, more
+-- detailed one is used (damage 30/45/60/90, stun 10/15/20/30s, cost 50/150/300/750).
+Config.Stakes = {
+	AttackRange = 8,
+	Cooldown = 3,
+
+	Tiers = {
+		{
+			Id = "Common",
+			Name = "Wooden Stake",
+			Damage = 30,
+			StunSeconds = 10,
+			Cost = 50,
+			Color = Color3.fromRGB(140, 105, 70),
+			Order = 1,
+		},
+		{
+			Id = "Uncommon",
+			Name = "Silver-Tipped Stake",
+			Damage = 45,
+			StunSeconds = 15,
+			Cost = 150,
+			Color = Color3.fromRGB(190, 195, 205),
+			Order = 2,
+		},
+		{
+			Id = "Rare",
+			Name = "Rune-Carved Stake",
+			Damage = 60,
+			StunSeconds = 20,
+			Cost = 300,
+			Color = Color3.fromRGB(120, 160, 220),
+			Order = 3,
+		},
+		{
+			Id = "Legendary",
+			Name = "Ashwood Reliquary",
+			Damage = 90,
+			StunSeconds = 30,
+			Cost = 750,
+			Color = Color3.fromRGB(240, 200, 100),
+			Order = 4,
+		},
+	},
+
+	-- Killers are immortal. Draining their HP bar only extends the stun.
+	StunOnDepleted = 8, -- bonus stun seconds when a hit empties the bar
+}
+
+--==========================================================================
+-- REVIVAL
+--==========================================================================
+Config.Revival = {
+	BleedOutSeconds = 30,
+	ReviveHoldSeconds = 3,
+	ReviveHealthPercent = 0.5,
+	PostReviveImmunitySeconds = 2,
+	ReviveRange = 10,
+
+	-- Design doc body says injured players cannot move; the "Flee the Facility"
+	-- inspiration section suggests letting them crawl. Set > 0 to enable crawling.
+	CrawlSpeed = 0,
+
+	CoinsPerRevive = 20, -- DOC: 10 in one section, 20 in the award table; 20 used
+}
+
+--==========================================================================
+-- OBJECTIVES
+--==========================================================================
+Config.Objectives = {
+	Potions = {
+		Goal = 15,
+		ActiveAtOnce = 5,
+		RespawnDelay = 30,
+		HoldSeconds = 5,
+	},
+	Mirrors = {
+		Goal = 5,
+		HoldSeconds = 0, -- instant on interact
+	},
+	Crosses = {
+		Goal = 14,
+		HoldSeconds = 3,
+		CarrySlowdown = 0.9, -- walk speed multiplier while carrying crosses
+	},
+	Ingredients = {
+		Items = { "BloodSample", "HolyWater", "Garlic", "MagicDust" },
+		HoldSeconds = 3,
+		RitualHoldSeconds = 6,
+	},
+	Clock = {
+		HoldSeconds = 2,
+		ToleranceMinutes = 5, -- how close the player must set the hands
+	},
+	SafeZone = {
+		Goal = 3,
+		HoldSeconds = 4,
+	},
+}
+
+--==========================================================================
+-- HIDING
+--==========================================================================
+Config.Hiding = {
+	ExitDelay = 1, -- anti hide-spam
+	EnterDuration = 0.5,
+	NoiseWhileHidden = 0, -- hidden players generate no movement noise
+}
+
+--==========================================================================
+-- HELPER NPCs (Robby & Benny)
+--==========================================================================
+Config.Helpers = {
+	AppearancesPerRound = { Min = 3, Max = 4 },
+	FirstAppearanceDelay = 60,
+	AppearanceGap = { Min = 70, Max = 130 },
+
+	-- DOC: the PDFs say 15, 20 and 30 in three different places. The
+	-- characters.js mockup settles it at 30, and is the most recent statement.
+	SafeZoneDuration = 30,
+	SafeZoneRadius = 18,
+	SafeZoneKillerRepelRadius = 24,
+
+	WarnRange = 30, -- Benny warns when a killer is this close
+	VisibleSeconds = 25,
+
+	-- "Identity Fraud" inspiration: rare chance the helper is Robert in disguise.
+	ImposterChance = 0.05,
+}
+
+--==========================================================================
+-- ECONOMY
+--==========================================================================
+-- DOC: two coin tables exist. The round-end award table is used as the source of
+-- truth because it is the more complete of the two.
+Config.Economy = {
+	WinCoins = 50,
+	ParticipationCoins = 25,
+	CoinsPerTask = 10,
+	CoinsPerRevive = 20,
+	TopRankBonus = 50,
+
+	StartingCoins = 0,
+	StartingStake = "Common", -- everyone owns the basic stake from the start
+}
+
+Config.Shop = {
+	-- DOC: prices differ between sections. Stake prices come from the tier table
+	-- above; consumables use the "Consumable Items" section values.
+	SpeedPotion = {
+		Id = "SpeedPotion",
+		Name = "Swamp Runner's Draught",
+		Cost = 200,
+		Description = "Run at double speed for 10 minutes of real time.",
+		Multiplier = 2,
+		DurationSeconds = 600,
+		Consumable = true,
+	},
+	HealthPotion = {
+		Id = "HealthPotion",
+		Name = "Bayou Restorative",
+		Cost = 100,
+		Description = "Instantly restore yourself to full health.",
+		Consumable = true,
+	},
+}
+
+--==========================================================================
+-- MAPS
+--==========================================================================
+Config.Maps = {
+	{ Id = "TheHouse", Name = "The House", Description = "The decaying plantation manor.", Enabled = true },
+	{ Id = "TheYard", Name = "The Yard", Description = "Overgrown gardens and the old well.", Enabled = false },
+	{ Id = "MenensLair", Name = "Menen's Lair", Description = "A pocket dimension that will not hold still.", Enabled = false },
+	{ Id = "TheGraveyard", Name = "The Graveyard", Description = "Family crypts, and Ava's grave.", Enabled = false },
+}
+
+--==========================================================================
+-- DATA PERSISTENCE
+--==========================================================================
+Config.Data = {
+	StoreName = "DollysHome_PlayerData_v1",
+	AutosaveInterval = 120,
+	MaxRetries = 4,
+	RetryBackoff = 2,
+}
+
+--==========================================================================
+-- DEBUG
+--==========================================================================
+Config.Debug = {
+	Verbose = false, -- print state transitions to the output window
+	ShowKillerState = false, -- billboard above each killer showing its AI state
+	ShowNoiseInOutput = false,
+}
+
+--==========================================================================
+-- Derived values
+--==========================================================================
+Config.Killer.RegenPerSecond = 1 / Config.Killer.RegenFullSeconds -- fraction of max HP per second
+
+--- Returns the noise tier table for a given noise level.
+function Config.getNoiseTier(level: number)
+	for _, tier in Config.Noise.Tiers do
+		if level >= tier.Min and level <= tier.Max then
+			return tier
+		end
+	end
+	return Config.Noise.Tiers[1]
+end
+
+--- Returns the stake tier table for an id, or nil.
+function Config.getStakeTier(id: string?)
+	if not id then
+		return nil
+	end
+	for _, tier in Config.Stakes.Tiers do
+		if tier.Id == id then
+			return tier
+		end
+	end
+	return nil
+end
+
+--- Returns only the maps currently playable.
+function Config.getEnabledMaps()
+	local out = {}
+	for _, map in Config.Maps do
+		if map.Enabled then
+			table.insert(out, map)
+		end
+	end
+	return out
+end
+
+return Config
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX2">
+			<Properties>
+				<string name="Name">KillerData</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	KillerData.luau
+	--------------------------------------------------------------------------
+	The cursed family. Stats, patrol preferences, and voice lines.
+
+	NAMING NOTE
+	The source documents spell the youngest child three ways -- "Babby", "Baby",
+	and "Bobby" -- and describe what is almost certainly one character twice
+	(a crawling child who uses vents, and a fast child who sings lullabies).
+	They are merged here into a single killer, "Baby", who has both traits.
+	If you want them as two separate killers, copy the Baby entry, rename it
+	"Bobby", and drop `CanUseCrawlspaces` from one of them. Nothing else needs
+	to change -- the roster is read from this table.
+
+	HearingMultiplier scales the global detection ranges in Config.Noise.Tiers.
+	1.0 is the baseline (a 45-stud listener). Robert hears best, Baby worst.
+	--------------------------------------------------------------------------
+]]
+
+export type KillerProfile = {
+	Id: string,
+	Name: string,
+	Title: string,
+	Role: "Killer" | "Helper",
+	MaxHealth: number,
+	ChaseSpeed: number,
+	PatrolSpeed: number,
+	HearingRange: number,
+	HearingMultiplier: number,
+	Persistence: number,
+	SearchAggression: number,
+	CanUseCrawlspaces: boolean?,
+	PatrolZones: { string },
+	BodyColor: Color3,
+	AccentColor: Color3,
+	EyeColor: Color3,
+	Scale: number,
+	Appearance: string,
+	AudioCue: string,
+	Lines: { string },
+}
+
+local KillerData = {}
+
+KillerData.Profiles = {
+	--======================================================================
+	Bob = {
+		Id = "Bob",
+		Name = "Bob",
+		Title = "The Broken Patriarch",
+		Role = "Killer",
+		MaxHealth = 620,
+		ChaseSpeed = 21,
+		PatrolSpeed = 15,
+		HearingRange = 50,
+		HearingMultiplier = 50 / 45,
+		-- Persistence multiplies how long a killer stays in chase/investigate.
+		Persistence = 1.4,
+		SearchAggression = 1.0,
+		PatrolZones = { "Foyer", "DiningRoom", "LivingRoom", "MasterBedroom", "Hallway" },
+		BodyColor = Color3.fromRGB(58, 48, 44),
+		AccentColor = Color3.fromRGB(28, 26, 30),
+		EyeColor = Color3.fromRGB(180, 40, 30),
+		Scale = 1.15,
+		Appearance = "Tall and gaunt, missing his right hand, dragging one leg in a tattered gentleman's suit.",
+		AudioCue = "Heavy uneven footsteps and a low growl. One boot drags.",
+		Lines = {
+			"Where did it all go wrong?",
+			"Barbara... why did you do this to me?",
+			"The family must stay together...",
+			"I only wanted us to last.",
+		},
+	},
+
+	--======================================================================
+	Barbara = {
+		Id = "Barbara",
+		Name = "Barbara",
+		Title = "The Violent Matriarch",
+		Role = "Killer",
+		MaxHealth = 620,
+		ChaseSpeed = 22, -- fastest killer
+		PatrolSpeed = 16,
+		HearingRange = 45,
+		HearingMultiplier = 1.0,
+		Persistence = 1.5,
+		SearchAggression = 1.5, -- checks hiding spots far more often
+		PatrolZones = { "Kitchen", "DiningRoom", "Pantry", "ChildrensRoom", "Hallway" },
+		BodyColor = Color3.fromRGB(92, 46, 52),
+		AccentColor = Color3.fromRGB(120, 22, 28),
+		EyeColor = Color3.fromRGB(230, 60, 60),
+		Scale = 1.05,
+		Appearance = "A blood-stained Victorian dress, wild hair, and hands she never washed clean.",
+		AudioCue = "A lullaby hummed too high, and sharp heels on floorboards.",
+		Lines = {
+			"My children need to eat!",
+			"I'm still a good mother!",
+			"Don't run from mother!",
+			"Come back. Come back and let me look at you.",
+		},
+	},
+
+	--======================================================================
+	Billy = {
+		Id = "Billy",
+		Name = "Billy",
+		Title = "The Eldest's Burden",
+		Role = "Killer",
+		MaxHealth = 430,
+		ChaseSpeed = 20,
+		PatrolSpeed = 17, -- covers ground fast on patrol
+		HearingRange = 40,
+		HearingMultiplier = 40 / 45,
+		Persistence = 0.9,
+		SearchAggression = 1.3, -- thorough rather than aggressive
+		PatrolZones = { "Cellar", "Storage", "BoilerRoom", "Hallway", "Foyer" },
+		BodyColor = Color3.fromRGB(74, 70, 52),
+		AccentColor = Color3.fromRGB(46, 44, 34),
+		EyeColor = Color3.fromRGB(220, 200, 70),
+		Scale = 1.0,
+		Appearance = "Torn farmhand clothing, skeletal features, a broken lantern he still carries.",
+		AudioCue = "Chains rattling, lantern oil dripping, labored breathing.",
+		Lines = {
+			"I tried to be a good brother...",
+			"This wasn't supposed to happen.",
+			"Stop hiding. It'll be quick.",
+			"Somebody had to hold this family together.",
+		},
+	},
+
+	--======================================================================
+	Robert = {
+		Id = "Robert",
+		Name = "Robert",
+		Title = "The Resentful Scholar",
+		Role = "Killer",
+		MaxHealth = 430,
+		ChaseSpeed = 19,
+		PatrolSpeed = 14,
+		HearingRange = 55, -- best ears in the family
+		HearingMultiplier = 55 / 45,
+		Persistence = 1.1,
+		SearchAggression = 1.1,
+		PatrolZones = { "Library", "Study", "RitualRoom", "Foyer" },
+		BodyColor = Color3.fromRGB(48, 44, 58),
+		AccentColor = Color3.fromRGB(30, 28, 38),
+		EyeColor = Color3.fromRGB(150, 90, 220),
+		Scale = 1.05,
+		Appearance = "Tattered scholar's robes, cracked spectacles hanging off his face, ink-stained hands.",
+		AudioCue = "Pages rustling and whispered Latin.",
+		Lines = {
+			"I deserved more than this!",
+			"I should have been the one...",
+			"Pride is all I have left.",
+			"I'll find you first. I always do.",
+		},
+	},
+
+	--======================================================================
+	Baby = {
+		Id = "Baby",
+		Name = "Baby",
+		Title = "The Innocent Corrupted",
+		Role = "Killer",
+		MaxHealth = 430,
+		-- Stats from the characters.js mockup, which supersedes the PDF's
+		-- "Very Fast / Small detection" wording.
+		ChaseSpeed = 20,
+		PatrolSpeed = 17,
+		HearingRange = 40,
+		HearingMultiplier = 40 / 45,
+		Persistence = 0.7, -- loses interest quickly, then finds you again
+		SearchAggression = 1.4,
+		CanUseCrawlspaces = true,
+		PatrolZones = { "ChildrensRoom", "Attic", "Crawlspace", "Hallway", "LivingRoom" },
+		BodyColor = Color3.fromRGB(112, 104, 96),
+		AccentColor = Color3.fromRGB(150, 140, 130),
+		EyeColor = Color3.fromRGB(120, 230, 140),
+		Scale = 0.7, -- child-sized
+		Appearance = "Child-sized and wrong, in a torn nightgown, moving on all fours as often as not.",
+		AudioCue = "Giggling that echoes, nails scratching wood, a lullaby that gets louder as she nears.",
+		Lines = {
+			"Let's play hide and seek!",
+			"Found you!",
+			"Why won't you play with me?",
+			"Ring around the rosie...",
+		},
+	},
+
+	--======================================================================
+	-- HELPERS -- never selected as killers.
+	--======================================================================
+	Robby = {
+		Id = "Robby",
+		Name = "Robby",
+		Title = "The Helper",
+		Role = "Helper",
+		MaxHealth = 430,
+		ChaseSpeed = 0,
+		PatrolSpeed = 0,
+		HearingRange = 0,
+		HearingMultiplier = 0,
+		Persistence = 0,
+		SearchAggression = 0,
+		PatrolZones = {},
+		BodyColor = Color3.fromRGB(120, 150, 190),
+		AccentColor = Color3.fromRGB(180, 210, 240),
+		EyeColor = Color3.fromRGB(120, 200, 255),
+		Scale = 1.0,
+		Appearance = "Flickering and translucent, still mostly himself, tired around the eyes.",
+		AudioCue = "A soft chime, like wind through a broken window.",
+		Lines = {
+			"Hide here, quickly!",
+			"I'm so sorry for what they've become...",
+			"Ava... please forgive us.",
+			"You can make it out. I believe in you.",
+		},
+	},
+
+	Benny = {
+		Id = "Benny",
+		Name = "Benny",
+		Title = "The Helper",
+		Role = "Helper",
+		MaxHealth = 430,
+		ChaseSpeed = 0,
+		PatrolSpeed = 0,
+		HearingRange = 0,
+		HearingMultiplier = 0,
+		Persistence = 0,
+		SearchAggression = 0,
+		PatrolZones = {},
+		BodyColor = Color3.fromRGB(130, 170, 150),
+		AccentColor = Color3.fromRGB(190, 230, 210),
+		EyeColor = Color3.fromRGB(140, 255, 190),
+		Scale = 0.92,
+		Appearance = "The youngest of the brothers, curious-eyed, barely marked by the curse.",
+		AudioCue = "A whisper right beside your ear.",
+		Lines = {
+			"Shh! Someone's coming this way!",
+			"I didn't want this... none of us did.",
+			"Ava... we're so sorry.",
+			"It's behind the bookshelf. Go, go!",
+		},
+	},
+} :: { [string]: KillerProfile }
+
+--- Killer ids eligible to be selected as the round's hunters.
+function KillerData.getKillerRoster(): { string }
+	local out = {}
+	for id, profile in KillerData.Profiles do
+		if profile.Role == "Killer" then
+			table.insert(out, id)
+		end
+	end
+	table.sort(out)
+	return out
+end
+
+--- Helper ids (Robby, Benny). Never hunt the players.
+function KillerData.getHelperRoster(): { string }
+	local out = {}
+	for id, profile in KillerData.Profiles do
+		if profile.Role == "Helper" then
+			table.insert(out, id)
+		end
+	end
+	table.sort(out)
+	return out
+end
+
+function KillerData.get(id: string): KillerProfile?
+	return KillerData.Profiles[id]
+end
+
+return KillerData
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX3">
+			<Properties>
+				<string name="Name">Net</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	Net.luau
+	--------------------------------------------------------------------------
+	Remote plumbing and the replicated game state container.
+
+	Two ways state reaches the client:
+
+	1. ATTRIBUTES on ReplicatedStorage/DollysHome/State. Roblox replicates
+	   attribute changes automatically, so the round phase, map, objective
+	   progress and so on cost us no RemoteEvent traffic at all. The client
+	   reads them with GetAttribute and listens with GetAttributeChangedSignal.
+
+	2. REMOTES, below, for one-off messages that aren't state -- "a task was
+	   just completed", "here are the round results", "I want to vote".
+
+	The server builds the folder; the client waits for it.
+	--------------------------------------------------------------------------
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local IS_SERVER = RunService:IsServer()
+local ROOT_NAME = "DollysHome"
+
+-- Server -> Client, or Client -> Server, fire-and-forget.
+local REMOTE_EVENTS = {
+	-- Server -> all clients
+	"RoundStatus", -- phase changes with a payload (map, killers, objective blurb)
+	"TaskCompleted", -- an objective finished; drives the toast + sound
+	"TaskProgress", -- incremental progress on an objective
+	"InjuredAlert", -- a player went down / was revived / bled out
+	"RoundResults", -- the end-of-round scoreboard payload
+	"Announce", -- generic system message toast
+	"KillerProximity", -- heartbeat intensity + which killer is near
+	"HelperMessage", -- Robby/Benny dialogue
+	"AvaDialogue", -- graveyard NPC dialogue
+	"LoreNoteRead", -- a lore note was picked up
+
+	-- Client -> Server
+	"CastVote", -- map vote
+	"SetSprinting", -- sprint key held/released
+	"SetCrouching", -- crouch key held/released
+	"RequestHide", -- enter/exit a hiding spot
+	"Attack", -- swing the equipped stake
+	"EquipStake", -- change equipped stake
+	"SubmitClock", -- grandfather clock minigame answer
+	"Purchase", -- buy from the shop
+	"UseConsumable", -- drink a potion
+	"SpectateTarget", -- cycle spectate camera
+	"AvaRespond", -- answer Ava's question
+}
+
+-- Request/response. Used sparingly -- they block the caller.
+local REMOTE_FUNCTIONS = {
+	"GetProfile", -- coins, wins, owned stakes, inventory
+	"GetRoundSnapshot", -- full state for a client that joined mid-round
+}
+
+local Net = {}
+
+Net.Events = {} :: { [string]: RemoteEvent }
+Net.Functions = {} :: { [string]: RemoteFunction }
+
+local root: Instance
+local eventsFolder: Instance
+local functionsFolder: Instance
+
+--==========================================================================
+-- Bootstrap
+--==========================================================================
+
+local function buildServer()
+	root = ReplicatedStorage:FindFirstChild(ROOT_NAME) or Instance.new("Folder")
+	root.Name = ROOT_NAME
+	root.Parent = ReplicatedStorage
+
+	eventsFolder = root:FindFirstChild("Events") or Instance.new("Folder")
+	eventsFolder.Name = "Events"
+	eventsFolder.Parent = root
+
+	functionsFolder = root:FindFirstChild("Functions") or Instance.new("Folder")
+	functionsFolder.Name = "Functions"
+	functionsFolder.Parent = root
+
+	for _, name in REMOTE_EVENTS do
+		local remote = eventsFolder:FindFirstChild(name)
+		if not remote then
+			remote = Instance.new("RemoteEvent")
+			remote.Name = name
+			remote.Parent = eventsFolder
+		end
+		Net.Events[name] = remote :: RemoteEvent
+	end
+
+	for _, name in REMOTE_FUNCTIONS do
+		local remote = functionsFolder:FindFirstChild(name)
+		if not remote then
+			remote = Instance.new("RemoteFunction")
+			remote.Name = name
+			remote.Parent = functionsFolder
+		end
+		Net.Functions[name] = remote :: RemoteFunction
+	end
+
+	-- Replicated state container.
+	local state = root:FindFirstChild("State")
+	if not state then
+		state = Instance.new("Configuration")
+		state.Name = "State"
+		state.Parent = root
+	end
+
+	local objectives = state:FindFirstChild("Objectives")
+	if not objectives then
+		objectives = Instance.new("Folder")
+		objectives.Name = "Objectives"
+		objectives.Parent = state
+	end
+
+	local votes = state:FindFirstChild("Votes")
+	if not votes then
+		votes = Instance.new("Configuration")
+		votes.Name = "Votes"
+		votes.Parent = state
+	end
+end
+
+local function buildClient()
+	root = ReplicatedStorage:WaitForChild(ROOT_NAME, 30)
+	assert(root, "[Net] DollysHome folder never replicated -- is the server bootstrap running?")
+
+	eventsFolder = root:WaitForChild("Events")
+	functionsFolder = root:WaitForChild("Functions")
+
+	for _, name in REMOTE_EVENTS do
+		Net.Events[name] = eventsFolder:WaitForChild(name) :: RemoteEvent
+	end
+	for _, name in REMOTE_FUNCTIONS do
+		Net.Functions[name] = functionsFolder:WaitForChild(name) :: RemoteFunction
+	end
+end
+
+if IS_SERVER then
+	buildServer()
+else
+	buildClient()
+end
+
+--==========================================================================
+-- Public helpers
+--==========================================================================
+
+function Net.getRoot(): Instance
+	return root
+end
+
+--- The Configuration instance carrying the replicated round state.
+function Net.getState(): Configuration
+	return (root:FindFirstChild("State") or root:WaitForChild("State")) :: Configuration
+end
+
+--- Folder holding one Configuration per active objective.
+function Net.getObjectivesFolder(): Folder
+	local state = Net.getState()
+	return (state:FindFirstChild("Objectives") or state:WaitForChild("Objectives")) :: Folder
+end
+
+--- Configuration whose attributes are `mapId -> voteCount`.
+function Net.getVotesFolder(): Configuration
+	local state = Net.getState()
+	return (state:FindFirstChild("Votes") or state:WaitForChild("Votes")) :: Configuration
+end
+
+--- Convenience: read a state attribute with a fallback.
+function Net.getStateValue(key: string, default: any): any
+	local value = Net.getState():GetAttribute(key)
+	if value == nil then
+		return default
+	end
+	return value
+end
+
+--- Server only. Sets a state attribute (skipping redundant writes).
+function Net.setStateValue(key: string, value: any)
+	assert(IS_SERVER, "[Net] setStateValue is server-only")
+	local state = Net.getState()
+	if state:GetAttribute(key) ~= value then
+		state:SetAttribute(key, value)
+	end
+end
+
+--- Server only. Fires a RemoteEvent at every player.
+function Net.fireAll(eventName: string, ...: any)
+	assert(IS_SERVER, "[Net] fireAll is server-only")
+	local remote = Net.Events[eventName]
+	assert(remote, `[Net] unknown remote event "{eventName}"`)
+	remote:FireAllClients(...)
+end
+
+--- Server only. Fires a RemoteEvent at one player.
+function Net.fire(player: Player, eventName: string, ...: any)
+	assert(IS_SERVER, "[Net] fire is server-only")
+	local remote = Net.Events[eventName]
+	assert(remote, `[Net] unknown remote event "{eventName}"`)
+	remote:FireClient(player, ...)
+end
+
+return Net
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX4">
+			<Properties>
+				<string name="Name">ObjectiveData</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	ObjectiveData.luau
+	--------------------------------------------------------------------------
+	Definitions for every task type, plus the round combinations they're drawn
+	from. ObjectiveService reads this table -- adding a new objective means
+	adding an entry here and (if it's a new Kind) a handler in ObjectiveService.
+
+	Kinds:
+	  "collect"     -- pick up N items spawned at tagged points
+	  "ingredients" -- collect 4 named items, then use the ritual table
+	  "clock"       -- set the grandfather clock to a randomized time
+	  "fuses"       -- restore power to N safe zone entrances
+	--------------------------------------------------------------------------
+]]
+
+local Config = require(script.Parent.Config)
+
+export type ObjectiveDef = {
+	Id: string,
+	Kind: string,
+	Label: string,
+	ShortLabel: string,
+	Goal: number,
+	SpawnTaskType: string?,
+	HoldSeconds: number,
+	Description: string,
+	CompletionNoise: number?,
+	Icon: string?,
+}
+
+local ObjectiveData = {}
+
+ObjectiveData.Definitions = {
+	Potions = {
+		Id = "Potions",
+		Kind = "collect",
+		Label = "Collect Potions",
+		ShortLabel = "Potions",
+		Goal = Config.Objectives.Potions.Goal,
+		SpawnTaskType = "Potion",
+		HoldSeconds = Config.Objectives.Potions.HoldSeconds,
+		Description = "Fifteen bottles are hidden through the house. Only five sit out at a time -- take one and another is set out somewhere else a half-minute later.",
+		Icon = "rbxassetid://0",
+	},
+
+	Mirrors = {
+		Id = "Mirrors",
+		Kind = "collect",
+		Label = "Recover Mirror Fragments",
+		ShortLabel = "Mirrors",
+		Goal = Config.Objectives.Mirrors.Goal,
+		SpawnTaskType = "Mirror",
+		HoldSeconds = Config.Objectives.Mirrors.HoldSeconds,
+		Description = "Five shards of the family mirror, tucked into drawers and behind paintings. They come away in your hand the moment you touch them.",
+		CompletionNoise = Config.Noise.Actions.BreakMirror,
+		Icon = "rbxassetid://0",
+	},
+
+	Crosses = {
+		Id = "Crosses",
+		Kind = "collect",
+		Label = "Gather Blessed Crosses",
+		ShortLabel = "Crosses",
+		Goal = Config.Objectives.Crosses.Goal,
+		SpawnTaskType = "Cross",
+		HoldSeconds = Config.Objectives.Crosses.HoldSeconds,
+		Description = "Fourteen iron crosses. They are heavier than they look, and you will feel every one you carry.",
+		Icon = "rbxassetid://0",
+	},
+
+	Ingredients = {
+		Id = "Ingredients",
+		Kind = "ingredients",
+		Label = "Brew the Sealing Potion",
+		ShortLabel = "Sealing Potion",
+		Goal = #Config.Objectives.Ingredients.Items,
+		HoldSeconds = Config.Objectives.Ingredients.HoldSeconds,
+		Description = "Blood from the ritual room, holy water from the cellar, garlic from the kitchen, magic dust from the study. Bring all four to the ritual table.",
+		CompletionNoise = Config.Noise.Actions.BrewPotion,
+		Icon = "rbxassetid://0",
+	},
+
+	Clock = {
+		Id = "Clock",
+		Kind = "clock",
+		Label = "Set the Grandfather Clock",
+		ShortLabel = "Clock",
+		Goal = 1,
+		HoldSeconds = Config.Objectives.Clock.HoldSeconds,
+		Description = "The clock stopped at the hour Ava died. Set it right -- and brace yourself, because it will chime.",
+		CompletionNoise = Config.Noise.Actions.AdjustClock,
+		Icon = "rbxassetid://0",
+	},
+
+	SafeZones = {
+		Id = "SafeZones",
+		Kind = "fuses",
+		Label = "Restore the Sanctified Barriers",
+		ShortLabel = "Safe Zones",
+		Goal = Config.Objectives.SafeZone.Goal,
+		HoldSeconds = Config.Objectives.SafeZone.HoldSeconds,
+		Description = "Three fuse boxes feed the blessed lamps at the safe zone doors. Get them all burning again.",
+		Icon = "rbxassetid://0",
+	},
+} :: { [string]: ObjectiveDef }
+
+--[[
+	Round combinations. Potions is the primary objective and appears in every
+	set, matching the design doc. Weight biases the random pick -- higher weight
+	means the combo comes up more often.
+]]
+ObjectiveData.Combos = {
+	{ Id = "Reflections", Objectives = { "Potions", "Mirrors" }, Weight = 3 },
+	{ Id = "Consecration", Objectives = { "Potions", "Crosses" }, Weight = 3 },
+	{ Id = "TheSealing", Objectives = { "Potions", "Ingredients", "Clock" }, Weight = 2 },
+	{ Id = "Sanctuary", Objectives = { "Potions", "Mirrors", "SafeZones" }, Weight = 2 },
+	{ Id = "TheLongNight", Objectives = { "Potions", "Crosses", "Ingredients" }, Weight = 1 },
+}
+
+--[[
+	Environmental storytelling. Tag a part DH_LoreNote and set its NoteId
+	attribute to one of these keys.
+]]
+ObjectiveData.LoreNotes = {
+	BobLedger = {
+		Title = "Funeral Ledger, page 14",
+		Author = "Bob",
+		Body = "Third notice from the bank. If the crop fails again we lose the house and every acre with it. I will not be the one who loses what my father built. There has to be something left to trade.",
+	},
+	BarbaraBills = {
+		Title = "Doctor's Bill, unpaid",
+		Author = "Barbara",
+		Body = "For the treatment of the youngest child -- fourteen dollars. For the second visit -- eleven. Bob says not to worry. Bob says a great many things now.",
+	},
+	BillyLetter = {
+		Title = "Unsent letter",
+		Author = "Billy",
+		Body = "Dear Sirs, I am writing regarding admission to the medical college. I am the eldest of six and can offer no reference but my own hand. I have written this eleven times. I have sent it none.",
+	},
+	RobertJournal = {
+		Title = "Journal, water-damaged",
+		Author = "Robert",
+		Body = "Father chose Billy. Father always chooses Billy. I have read every book in this house and it has bought me nothing at all.",
+	},
+	AvaDiary1 = {
+		Title = "Ava's diary, torn page",
+		Author = "Ava",
+		Body = "They think Menen is a stranger. He came when I called him and he stays because I ask. I only wanted to know whether they would choose me. I am sorry that I wanted to know.",
+	},
+	AvaDiary2 = {
+		Title = "Ava's diary, last page",
+		Author = "Ava",
+		Body = "I have given them thirty days. I gave them thirty days the last time too, and the time before. I am not certain any more whether I am testing them or punishing myself.",
+	},
+	PreviousVictim = {
+		Title = "Scratched into the floorboards",
+		Author = "Unknown",
+		Body = "DO NOT RUN. IT ONLY HEARS YOU. -- there are four more sets of scratches beneath this one, in four different hands.",
+	},
+}
+
+--- Picks a weighted-random objective combination.
+function ObjectiveData.pickCombo(rng: Random?)
+	local random = rng or Random.new()
+	local total = 0
+	for _, combo in ObjectiveData.Combos do
+		total += combo.Weight
+	end
+
+	local roll = random:NextNumber() * total
+	for _, combo in ObjectiveData.Combos do
+		roll -= combo.Weight
+		if roll <= 0 then
+			return combo
+		end
+	end
+	return ObjectiveData.Combos[1]
+end
+
+function ObjectiveData.get(id: string): ObjectiveDef?
+	return ObjectiveData.Definitions[id]
+end
+
+return ObjectiveData
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX5">
+			<Properties>
+				<string name="Name">Palette</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	Palette.luau
+	--------------------------------------------------------------------------
+	The material language, ported from the `MAT` and `INGREDIENT_MAT` tables in
+	the props.js mockup.
+
+	Three.js materials carry colour, roughness, metalness, emissive and opacity.
+	Roblox has Color3 + a Material enum + Transparency, and gets "emissive" by
+	using Enum.Material.Neon. So each entry here records the original intent and
+	the closest Roblox expression of it:
+
+	  Colour      -> Part.Color
+	  Material    -> Part.Material   (chosen from roughness/metalness)
+	  Transparency-> 1 - opacity
+	  Glow        -> forces Neon, and optionally attaches a PointLight
+
+	When you tweak a colour in the mockup, change it here and it changes
+	everywhere in the game at once.
+	--------------------------------------------------------------------------
+]]
+
+export type Style = {
+	Colour: Color3,
+	Material: Enum.Material,
+	Transparency: number?,
+	Glow: number?, -- PointLight brightness; nil for no light
+	GlowRange: number?,
+}
+
+local Palette = {}
+
+local function style(colour: Color3, material: Enum.Material, transparency: number?, glow: number?, range: number?): Style
+	return {
+		Colour = colour,
+		Material = material,
+		Transparency = transparency,
+		Glow = glow,
+		GlowRange = range,
+	}
+end
+
+--==========================================================================
+-- Structure
+--==========================================================================
+Palette.Style = {
+	plaster = style(Color3.fromRGB(141, 132, 116), Enum.Material.Plaster),
+	paperGrn = style(Color3.fromRGB(92, 106, 79), Enum.Material.Fabric),
+	paperRust = style(Color3.fromRGB(125, 83, 64), Enum.Material.Fabric),
+	woodFloor = style(Color3.fromRGB(107, 80, 58), Enum.Material.WoodPlanks),
+	woodDark = style(Color3.fromRGB(63, 46, 34), Enum.Material.Wood),
+	woodPale = style(Color3.fromRGB(138, 116, 88), Enum.Material.WoodPlanks),
+	tile = style(Color3.fromRGB(156, 150, 138), Enum.Material.Concrete),
+	stone = style(Color3.fromRGB(90, 90, 86), Enum.Material.Slate),
+	brick = style(Color3.fromRGB(99, 68, 58), Enum.Material.Brick),
+	shingle = style(Color3.fromRGB(65, 58, 52), Enum.Material.Slate),
+	metal = style(Color3.fromRGB(126, 122, 114), Enum.Material.Metal),
+	brass = style(Color3.fromRGB(181, 154, 88), Enum.Material.Metal),
+	glass = style(Color3.fromRGB(185, 207, 210), Enum.Material.Glass, 0.66),
+	cloth = style(Color3.fromRGB(142, 135, 120), Enum.Material.Fabric),
+	clothRed = style(Color3.fromRGB(93, 34, 38), Enum.Material.Fabric),
+	carpet = style(Color3.fromRGB(77, 54, 48), Enum.Material.Fabric),
+	moss = style(Color3.fromRGB(111, 127, 92), Enum.Material.Grass),
+	wax = style(Color3.fromRGB(216, 205, 178), Enum.Material.SmoothPlastic),
+	flame = style(Color3.fromRGB(255, 217, 160), Enum.Material.Neon, nil, 2.2, 16),
+	blood = style(Color3.fromRGB(102, 21, 26), Enum.Material.SmoothPlastic),
+
+	--======================================================================
+	-- Gameplay overlays. Emissive in the mockup so they read against the dim
+	-- shell -- Neon here, for the same reason.
+	--======================================================================
+	hide = style(Color3.fromRGB(18, 48, 55), Enum.Material.SmoothPlastic, 0.58),
+	hideEdge = style(Color3.fromRGB(47, 211, 232), Enum.Material.Neon, nil, 1.4, 10),
+	noisy = style(Color3.fromRGB(122, 42, 16), Enum.Material.WoodPlanks, 0.28),
+	safe = style(Color3.fromRGB(92, 74, 21), Enum.Material.Neon, 0.4, 1.0, 22),
+	spawnP = style(Color3.fromRGB(31, 74, 42), Enum.Material.Neon, nil, 1.0, 10),
+	spawnK = style(Color3.fromRGB(74, 18, 32), Enum.Material.Neon, nil, 1.1, 10),
+	potion = style(Color3.fromRGB(58, 42, 106), Enum.Material.Neon, 0.15, 1.2, 14),
+	mirror = style(Color3.fromRGB(207, 228, 232), Enum.Material.Glass, 0.2, 0.7, 10),
+	cross = style(Color3.fromRGB(216, 196, 138), Enum.Material.Neon, nil, 0.5, 12),
+	ghost = style(Color3.fromRGB(217, 201, 138), Enum.Material.ForceField, 0.5, 1.1, 16),
+	ink = style(Color3.fromRGB(42, 47, 49), Enum.Material.SmoothPlastic),
+	inkLift = style(Color3.fromRGB(59, 66, 69), Enum.Material.SmoothPlastic),
+} :: { [string]: Style }
+
+--==========================================================================
+-- The four sealing-ritual ingredients
+--==========================================================================
+Palette.Ingredient = {
+	blood = style(Color3.fromRGB(109, 20, 24), Enum.Material.Neon, 0.1, 0.9, 12),
+	holy = style(Color3.fromRGB(207, 232, 255), Enum.Material.Neon, 0.25, 1.1, 14),
+	garlic = style(Color3.fromRGB(228, 220, 196), Enum.Material.SmoothPlastic, nil, 0.3, 8),
+	dust = style(Color3.fromRGB(74, 63, 122), Enum.Material.Neon, 0.15, 1.3, 14),
+} :: { [string]: Style }
+
+--- Ingredient key in the mockup -> the id ObjectiveService uses.
+Palette.IngredientId = {
+	blood = "BloodSample",
+	holy = "HolyWater",
+	garlic = "Garlic",
+	dust = "MagicDust",
+}
+
+--==========================================================================
+-- Patrol route colours, one per killer (from house.js ROUTES)
+--==========================================================================
+Palette.RouteColour = {
+	Bob = Color3.fromRGB(201, 162, 39),
+	Barbara = Color3.fromRGB(192, 57, 43),
+	Billy = Color3.fromRGB(217, 119, 6),
+	Robert = Color3.fromRGB(46, 134, 171),
+	Baby = Color3.fromRGB(125, 91, 166),
+}
+
+--==========================================================================
+-- Lookup
+--==========================================================================
+
+function Palette.get(name: string): Style
+	return Palette.Style[name] or Palette.Style.ink
+end
+
+--- Applies a style to a part, attaching a PointLight if the style glows.
+function Palette.apply(part: BasePart, styleOrName: Style | string)
+	local resolved: Style
+	if type(styleOrName) == "string" then
+		resolved = Palette.get(styleOrName)
+	else
+		resolved = styleOrName
+	end
+
+	part.Color = resolved.Colour
+	part.Material = resolved.Material
+	if resolved.Transparency then
+		part.Transparency = resolved.Transparency
+	end
+
+	if resolved.Glow then
+		local light = Instance.new("PointLight")
+		light.Color = resolved.Colour
+		light.Brightness = resolved.Glow
+		light.Range = resolved.GlowRange or 12
+		light.Parent = part
+	end
+end
+
+return Palette
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX6">
+			<Properties>
+				<string name="Name">Sounds</string>
+				<ProtectedString name="Source"><![CDATA[--!nonstrict
+--[[
+	Sounds.luau
+	--------------------------------------------------------------------------
+	Every sound the game plays, in one table.
+
+	THE IDS ARE BLANK ON PURPOSE. Picking audio is a taste decision and a
+	licensing one, and neither belongs in a code file. Upload or find what you
+	want on the Creator Store, paste the ids in here, and every system that
+	plays them starts working -- nothing else has to change. Anything left blank
+	is skipped silently, so the game runs fine with no audio at all.
+
+	The design document's audio direction, for reference when you're choosing:
+
+	  Bob      heavy dragging footsteps, one boot scraping; funeral bells
+	  Barbara  a lullaby hummed too high; sharp heels
+	  Billy    chains, lantern oil dripping, labored breathing
+	  Robert   pages turning, whispered Latin
+	  Baby     giggling that echoes; nails on wood; a lullaby that gets louder
+
+	The per-killer approach sounds are the single highest-value audio in the
+	game -- they're how a player identifies *which* thing is hunting them, and
+	therefore how they decide whether to run or hold still.
+	--------------------------------------------------------------------------
+]]
+
+local Sounds = {}
+
+--- Continuous heartbeat; rate and volume scale with killer proximity.
+Sounds.Heartbeat = ""
+
+--- Ambience, looped per map.
+Sounds.Ambience = {
+	Lobby = "",
+	TheHouse = "",
+	TheYard = "",
+	MenensLair = "",
+	TheGraveyard = "",
+}
+
+--- Per-killer approach loop. Played at the killer's position, so it's
+--- directional -- which is the whole point.
+Sounds.KillerApproach = {
+	Bob = "",
+	Barbara = "",
+	Billy = "",
+	Robert = "",
+	Baby = "",
+}
+
+--- One-shots.
+Sounds.Effects = {
+	TaskComplete = "",
+	PotionCollect = "",
+	CrossCollect = "",
+	MirrorShatter = "",
+	ClockChime = "",
+	PotionBrew = "",
+	StakeHit = "",
+	StakeMiss = "",
+	PlayerDowned = "",
+	PlayerRevived = "",
+	HideEnter = "",
+	HideExit = "",
+	Discovered = "",
+	SafeZoneOpen = "",
+	HelperAppear = "",
+	RoundStart = "",
+	Victory = "",
+	Defeat = "",
+	CoinTally = "",
+	VoteCast = "",
+}
+
+--- True if an id is set and looks like an asset reference.
+function Sounds.isSet(id: string?): boolean
+	return type(id) == "string" and id ~= "" and id ~= "rbxassetid://0"
+end
+
+--[[
+	Creates a Sound if the id is set, otherwise returns nil. Callers should
+	handle nil rather than assume -- that's what makes the blank table safe.
+]]
+function Sounds.create(id: string?, parent: Instance, props: { [string]: any }?): Sound?
+	if not Sounds.isSet(id) then
+		return nil
+	end
+
+	local sound = Instance.new("Sound")
+	sound.SoundId = id :: string
+	if props then
+		for key, value in props do
+			(sound :: any)[key] = value
+		end
+	end
+	sound.Parent = parent
+	return sound
+end
+
+return Sounds
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX7">
+			<Properties>
+				<string name="Name">StateKeys</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	StateKeys.luau
+	--------------------------------------------------------------------------
+	String constants for replicated attributes, so a typo is a nil index rather
+	than a silent no-op. Server writes them, client reads them.
+	--------------------------------------------------------------------------
+]]
+
+local StateKeys = {}
+
+-- Attributes on ReplicatedStorage.DollysHome.State ------------------------
+StateKeys.Game = {
+	Phase = "Phase", -- "Booting" | "Intermission" | "Starting" | "Active" | "Results"
+	PhaseEndsAt = "PhaseEndsAt", -- workspace:GetServerTimeNow() deadline; client renders the countdown
+	PhaseStartedAt = "PhaseStartedAt",
+	MapId = "MapId",
+	MapName = "MapName",
+	NextMapId = "NextMapId", -- announced once voting closes
+	KillerNames = "KillerNames", -- comma-joined display names
+	ComboId = "ComboId",
+	AlivePlayers = "AlivePlayers",
+	TotalPlayers = "TotalPlayers",
+	Result = "Result", -- "" | "Victory" | "Defeat"
+	VotingOpen = "VotingOpen",
+	RoundNumber = "RoundNumber",
+}
+
+-- Phase values ------------------------------------------------------------
+StateKeys.Phase = {
+	Booting = "Booting",
+	Intermission = "Intermission",
+	Starting = "Starting",
+	Active = "Active",
+	Results = "Results",
+}
+
+-- Attributes on each objective Configuration ------------------------------
+StateKeys.Objective = {
+	Label = "Label",
+	ShortLabel = "ShortLabel",
+	Current = "Current",
+	Goal = "Goal",
+	Complete = "Complete",
+	Order = "Order",
+	Detail = "Detail", -- free-form line, e.g. "Garlic, Holy Water"
+}
+
+-- Attributes on Player ----------------------------------------------------
+StateKeys.Player = {
+	Noise = "Noise",
+	NoiseTier = "NoiseTier",
+	Stamina = "Stamina",
+	Sprinting = "Sprinting",
+	Alive = "Alive", -- in the round and on their feet
+	Injured = "Injured", -- downed, bleeding out
+	Eliminated = "Eliminated", -- out for the round
+	Hidden = "Hidden",
+	HidingKind = "HidingKind",
+	ReviveEndsAt = "ReviveEndsAt", -- server time the bleed-out expires
+	RoundTasks = "RoundTasks", -- individual contribution this round
+	RoundRevives = "RoundRevives",
+	EquippedStake = "EquippedStake",
+	StakeReadyAt = "StakeReadyAt",
+	CarriedCrosses = "CarriedCrosses",
+	SpeedBoostUntil = "SpeedBoostUntil",
+	InSafeZone = "InSafeZone",
+	Spectating = "Spectating",
+}
+
+-- Attributes on a killer model -------------------------------------------
+StateKeys.Killer = {
+	KillerId = "KillerId",
+	AIState = "AIState", -- "Patrol" | "Investigate" | "Chase" | "Stunned"
+	Health = "Health",
+	MaxHealth = "MaxHealth",
+	StunnedUntil = "StunnedUntil",
+	TargetName = "TargetName",
+}
+
+return StateKeys
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX8">
+			<Properties>
+				<string name="Name">Tags</string>
+				<ProtectedString name="Source"><![CDATA[--!strict
+--[[
+	Tags.luau
+	--------------------------------------------------------------------------
+	CollectionService tag names. This is the contract between the code and
+	whatever you build in Studio.
+
+	Tag a part in Studio (Studio -> View -> Tag Editor) and the game will find
+	it and wire it up. You never have to touch a script to add a hiding spot or
+	a potion spawn -- just tag a part.
+
+	See docs/MAP_BUILDING.md for the full reference, including the attributes
+	each tag understands.
+	--------------------------------------------------------------------------
+]]
+
+local Tags = {
+	-- Spawns -------------------------------------------------------------
+	LobbySpawn = "DH_LobbySpawn", -- where players stand between rounds
+	PlayerSpawn = "DH_PlayerSpawn", -- where players start a round on a map
+	KillerSpawn = "DH_KillerSpawn", -- where killers enter the map
+
+	-- Navigation ---------------------------------------------------------
+	PatrolNode = "DH_PatrolNode", -- Attribute: Zone (string) -- see KillerData.PatrolZones
+	Crawlspace = "DH_Crawlspace", -- patrol node only Baby can use
+
+	-- Objectives ---------------------------------------------------------
+	TaskSpawn = "DH_TaskSpawn", -- Attribute: TaskType ("Potion"|"Cross"|"Mirror"|"Any")
+	IngredientSpawn = "DH_IngredientSpawn", -- Attribute: Ingredient (BloodSample|HolyWater|Garlic|MagicDust)
+	RitualTable = "DH_RitualTable", -- where the four ingredients get combined
+	Clock = "DH_Clock", -- the grandfather clock minigame
+	FuseBox = "DH_FuseBox", -- safe-zone activation objective
+
+	-- Stealth ------------------------------------------------------------
+	HidingSpot = "DH_HidingSpot", -- Attribute: Kind (Locker|Bed|Table|Closet|Duct)
+	NoisyTile = "DH_NoisyTile", -- Attribute: Noise (number, default Config.Noise.Actions.CreakyFloor)
+	Door = "DH_Door", -- Attribute: Noise (number, default Config.Noise.Actions.OpenDoor)
+
+	-- Landmarks ----------------------------------------------------------
+	SafeZone = "DH_SafeZone", -- permanent safe zone volume
+	AvaGrave = "DH_AvaGrave", -- Ava dialogue NPC anchor (Graveyard map)
+	HelperSpawn = "DH_HelperSpawn", -- candidate spots for Robby/Benny to appear
+	LoreNote = "DH_LoreNote", -- Attribute: NoteId (string) -> ObjectiveData.LoreNotes
+
+	-- Runtime-only (added by code, not by you) ----------------------------
+	ActiveKiller = "DH_ActiveKiller",
+	ActiveHelper = "DH_ActiveHelper",
+	TaskItem = "DH_TaskItem",
+	TempSafeZone = "DH_TempSafeZone",
+}
+
+return Tags
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX9">
+			<Properties>
+				<string name="Name">Util</string>
+				<ProtectedString name="Source"><![CDATA[--!nonstrict
+--[[
+	Util.luau
+	--------------------------------------------------------------------------
+	Small shared helpers. Nothing here knows anything about Dolly's Home
+	specifically -- it's all generic plumbing.
+	--------------------------------------------------------------------------
+]]
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local Util = {}
+
+--==========================================================================
+-- Time
+--==========================================================================
+
+--- Server-synced clock. Safe to compare across server and client.
+function Util.now(): number
+	return Workspace:GetServerTimeNow()
+end
+
+--- Formats seconds as M:SS (clamped at zero).
+function Util.formatClock(seconds: number): string
+	local total = math.max(0, math.floor(seconds))
+	return string.format("%d:%02d", total // 60, total % 60)
+end
+
+--==========================================================================
+-- Characters
+--==========================================================================
+
+--- Returns (character, humanoid, rootPart) if the player has a live character.
+function Util.getCharacterParts(player: Player): (Model?, Humanoid?, BasePart?)
+	local character = player.Character
+	if not character or not character.Parent then
+		return nil, nil, nil
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	return character, humanoid, root
+end
+
+--- True if the player has a character with a humanoid above zero health.
+function Util.isCharacterAlive(player: Player): boolean
+	local _, humanoid = Util.getCharacterParts(player)
+	return humanoid ~= nil and humanoid.Health > 0
+end
+
+--- Position of a player's root part, or nil.
+function Util.getPosition(player: Player): Vector3?
+	local _, _, root = Util.getCharacterParts(player)
+	return root and root.Position or nil
+end
+
+--- Owning Player of an instance inside a character model, or nil.
+function Util.getPlayerFromDescendant(instance: Instance): Player?
+	local model = instance:FindFirstAncestorOfClass("Model")
+	while model do
+		local player = Players:GetPlayerFromCharacter(model)
+		if player then
+			return player
+		end
+		model = model:FindFirstAncestorOfClass("Model")
+	end
+	return nil
+end
+
+--==========================================================================
+-- Tables
+--==========================================================================
+
+--- Fisher-Yates, in place. Returns the same table for chaining.
+function Util.shuffle<T>(list: { T }, rng: Random?): { T }
+	local random = rng or Random.new()
+	for i = #list, 2, -1 do
+		local j = random:NextInteger(1, i)
+		list[i], list[j] = list[j], list[i]
+	end
+	return list
+end
+
+--- One random element, or nil for an empty list.
+function Util.pick<T>(list: { T }, rng: Random?): T?
+	if #list == 0 then
+		return nil
+	end
+	local random = rng or Random.new()
+	return list[random:NextInteger(1, #list)]
+end
+
+--- Up to `count` distinct random elements.
+function Util.pickMany<T>(list: { T }, count: number, rng: Random?): { T }
+	local copy = table.clone(list)
+	Util.shuffle(copy, rng)
+	local out = {}
+	for i = 1, math.min(count, #copy) do
+		out[i] = copy[i]
+	end
+	return out
+end
+
+--- Shallow copy.
+function Util.copy<T>(source: { [any]: any }): { [any]: any }
+	local out = {}
+	for key, value in source do
+		out[key] = value
+	end
+	return out
+end
+
+--- Number of key/value pairs in a dictionary.
+function Util.count(dict: { [any]: any }): number
+	local n = 0
+	for _ in dict do
+		n += 1
+	end
+	return n
+end
+
+--==========================================================================
+-- Instances
+--==========================================================================
+
+--- Instance.new plus a property table, in one call.
+function Util.create(className: string, props: { [string]: any }?): any
+	local instance = Instance.new(className)
+	if props then
+		local parent = props.Parent
+		for key, value in props do
+			if key ~= "Parent" then
+				(instance :: any)[key] = value
+			end
+		end
+		if parent then
+			instance.Parent = parent
+		end
+	end
+	return instance
+end
+
+--- Welds `part` to `to` with a WeldConstraint and makes it non-colliding.
+function Util.weld(part: BasePart, to: BasePart)
+	part.Anchored = false
+	part.CanCollide = false
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = part
+	weld.Part1 = to
+	weld.Parent = part
+end
+
+--- Attaches an Attachment at a local offset.
+function Util.attachment(parent: BasePart, offset: Vector3?): Attachment
+	local attachment = Instance.new("Attachment")
+	attachment.Position = offset or Vector3.zero
+	attachment.Parent = parent
+	return attachment
+end
+
+--==========================================================================
+-- Math
+--==========================================================================
+
+function Util.lerp(a: number, b: number, alpha: number): number
+	return a + (b - a) * alpha
+end
+
+--- Frame-rate independent exponential approach. `speed` is roughly
+--- "how many e-foldings per second".
+function Util.damp(current: number, target: number, speed: number, dt: number): number
+	return target + (current - target) * math.exp(-speed * dt)
+end
+
+--- Signed horizontal angle in degrees between a facing direction and a target.
+function Util.angleTo(from: CFrame, target: Vector3): number
+	local flatLook = Vector3.new(from.LookVector.X, 0, from.LookVector.Z)
+	local flatDir = Vector3.new(target.X - from.Position.X, 0, target.Z - from.Position.Z)
+	if flatLook.Magnitude < 1e-4 or flatDir.Magnitude < 1e-4 then
+		return 0
+	end
+	local dot = math.clamp(flatLook.Unit:Dot(flatDir.Unit), -1, 1)
+	return math.deg(math.acos(dot))
+end
+
+--==========================================================================
+-- Debug
+--==========================================================================
+
+local Config = require(script.Parent.Config)
+
+function Util.log(scope: string, message: string, ...: any)
+	if Config.Debug.Verbose then
+		print(`[DollysHome/{scope}] ` .. string.format(message, ...))
+	end
+end
+
+function Util.warn(scope: string, message: string, ...: any)
+	warn(`[DollysHome/{scope}] ` .. string.format(message, ...))
+end
+
+return Util
+]]></ProtectedString>
+			</Properties>
+		</Item>
+	</Item>
+</roblox>

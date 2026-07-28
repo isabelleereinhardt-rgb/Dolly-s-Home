@@ -17,10 +17,52 @@
 	--------------------------------------------------------------------------
 ]]
 
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Net = require(Shared.Net) -- builds ReplicatedStorage.DollysHome
 local StateKeys = require(Shared.StateKeys)
+
+--[[
+	Atmosphere.
+
+	These are set here rather than left to the Rojo project file, so the game
+	looks right whether it was synced with Rojo or dragged in from an .rbxmx.
+	Each is applied on its own so that one unwritable property (Technology is
+	Studio-only on some versions) can't take the rest down with it.
+]]
+local function applyAtmosphere()
+	local lightingProps = {
+		Ambient = Color3.fromRGB(13, 13, 18),
+		OutdoorAmbient = Color3.fromRGB(23, 26, 33),
+		Brightness = 1,
+		ClockTime = 0,
+		GeographicLatitude = 30,
+		FogColor = Color3.fromRGB(23, 26, 23),
+		FogStart = 40,
+		FogEnd = 260,
+		GlobalShadows = true,
+		EnvironmentDiffuseScale = 0.35,
+		EnvironmentSpecularScale = 0.2,
+		Technology = Enum.Technology.ShadowMap,
+	}
+
+	for property, value in lightingProps do
+		pcall(function()
+			(Lighting :: any)[property] = value
+		end)
+	end
+
+	-- Players who reset come back to the lobby; three seconds is long enough to
+	-- read the results screen but short enough not to feel like a punishment.
+	pcall(function()
+		Players.RespawnTime = 3
+	end)
+end
+
+applyAtmosphere()
 
 local Services = script.Services
 

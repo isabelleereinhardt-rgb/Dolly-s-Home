@@ -6,6 +6,10 @@
 *.rbxl.lock
 *.rbxlx.lock
 
+# ...except the drag-and-drop bundles, which are the whole point of tools/build_rbxmx.py.
+# These are committed so they can be downloaded straight from GitHub.
+!build/*.rbxmx
+
 # Tooling
 /sourcemap.json
 /.rokit/
