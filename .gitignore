@@ -9,6 +9,7 @@
 # ...except the drag-and-drop bundles, which are the whole point of tools/build_rbxmx.py.
 # These are committed so they can be downloaded straight from GitHub.
 !build/*.rbxmx
+!build/*.rbxlx
 
 # Source archives produced with `git archive` for sharing. Regenerable from any
 # commit, and a copy of the repo inside the repo -- never commit these.

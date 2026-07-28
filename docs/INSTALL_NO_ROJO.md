@@ -1,6 +1,30 @@
 # Installing without Rojo
 
-Three drag-and-drop files. No terminal, no plugins, no Rojo.
+## The easy way: open one file
+
+**`build/DollysHome.rbxlx`** is the entire game as a single place file.
+
+1. Download it.
+2. Double-click it — Studio opens it.
+   (Or in Studio: **File → Open from File…** and pick it.)
+3. Press **Play**.
+
+That's it. No importing, no dragging, no folders to get right. All 43 scripts
+are already in position.
+
+To make it your own published game: **File → Publish to Roblox As…**, then give
+it a name.
+
+> **One caveat.** This opens as a *new place*. If you've already built something
+> by hand in "Dolly's Home: GENERATION", that work is in your existing place and
+> won't be in this one. In that case use the three-file method below instead,
+> which adds the game to a place you already have.
+
+---
+
+## The other way: add it to a place you already have
+
+Three drag-and-drop files. Use these if you have existing work you want to keep.
 
 The files live in the **`build/`** folder of this repo:
 

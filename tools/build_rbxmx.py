@@ -152,6 +152,46 @@ HEADER = (
 )
 
 
+# Which service each bundle's root instance is parented to inside a place file.
+PLACE_LAYOUT = [
+    ("ReplicatedStorage", SRC / "shared", "Shared"),
+    ("ServerScriptService", SRC / "server", "DollysHome"),
+    # StarterPlayerScripts is nested inside StarterPlayer, handled specially.
+]
+
+
+def build_place() -> str:
+    """
+    Emits a complete .rbxlx place file -- the whole game as one document you
+    open in Studio, no importing at all.
+
+    Only the script containers are written. Lighting, Players.RespawnTime and
+    everything else are applied at runtime by init.server.luau, and the map and
+    lobby are built procedurally on startup, so there is no geometry to encode
+    here.
+    """
+    services: list[str] = []
+
+    def service(class_name: str, children: list[str]) -> str:
+        return emit_item(class_name, class_name, None, children, 1)
+
+    # Workspace, Players, Lighting and friends are created by Studio when it
+    # opens a place that omits them, so only the ones holding our code matter.
+    services.append(service("ReplicatedStorage", [build_directory(SRC / "shared", "Shared", 2)]))
+    services.append(service("ServerScriptService", [build_directory(SRC / "server", "DollysHome", 2)]))
+
+    starter_scripts = emit_item(
+        "StarterPlayerScripts",
+        "StarterPlayerScripts",
+        None,
+        [build_directory(SRC / "client", "DollysHomeClient", 3)],
+        2,
+    )
+    services.append(service("StarterPlayer", [starter_scripts]))
+
+    return f"{HEADER}\n" + "\n".join(services) + "\n</roblox>\n"
+
+
 def main() -> int:
     if not SRC.is_dir():
         print(f"error: {SRC} not found -- run this from the repo root", file=sys.stderr)
@@ -177,7 +217,15 @@ def main() -> int:
         print(f"  {bundle['file']}")
         print(f"      {script_count:>2} scripts, {size_kb:>6.1f} KB  ->  {bundle['destination']}")
 
-    print("\nIn Studio: right-click the service, 'Insert from File', pick the matching file.")
+    # The whole game as a single openable place.
+    place = OUT / "DollysHome.rbxlx"
+    place.write_text(build_place(), encoding="utf-8")
+    total_scripts = len(list(SRC.rglob("*.luau")))
+    print(f"\n  DollysHome.rbxlx")
+    print(f"      {total_scripts:>2} scripts, {place.stat().st_size / 1024:>6.1f} KB  ->  open it directly in Studio")
+
+    print("\nEasiest: double-click DollysHome.rbxlx.")
+    print("Or, to add to an existing place: right-click the service, 'Insert from File'.")
     return 0
 
 
