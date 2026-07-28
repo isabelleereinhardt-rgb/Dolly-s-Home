@@ -85,8 +85,9 @@ end
 --==========================================================================
 
 local function appearAsRobby(position: Vector3, isImposter: boolean)
-	local helperId = isImposter and "Robert" or "Robby"
-	local model = RigBuilder.build(helperId, true)
+	-- The imposter is Robby's rig with red eyes, not Robert's -- the whole point
+	-- is that he is indistinguishable until you look at them.
+	local model = RigBuilder.build(isImposter and "RobbyImposter" or "Robby", true)
 	if not model then
 		return
 	end
