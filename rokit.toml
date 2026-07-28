@@ -1,0 +1,12 @@
+# Tool versions for Dolly's Home.
+#
+# Install them all with:   rokit install
+# Rokit: https://github.com/rojo-rbx/rokit
+#
+# If you use Aftman instead, copy this file to aftman.toml -- the format is the
+# same -- and run `aftman install`.
+
+[tools]
+rojo = "rojo-rbx/rojo@7.4.4"
+stylua = "JohnnyMorganz/StyLua@2.0.2"
+selene = "Kampfkarren/selene@0.27.1"

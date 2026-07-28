@@ -1,0 +1,9 @@
+std = "roblox"
+
+[rules]
+# Roblox instances are frequently created and parented without the reference
+# being used afterwards; that is not a mistake.
+unused_variable = "warn"
+# We use `shadowing` deliberately in a few closures (e.g. `state` inside
+# objective setup functions).
+shadowing = "allow"

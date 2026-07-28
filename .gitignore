@@ -1,0 +1,24 @@
+# Build output
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Tooling
+/sourcemap.json
+/.rokit/
+/.aftman/
+/roblox.toml
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.json
+.idea/
+
+# Luau LSP artifacts
+/globalTypes.d.luau
+/*.d.luau
