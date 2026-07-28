@@ -16,35 +16,33 @@ conversation between you and the thing in the next room.
 
 ---
 
-## Start here — no tools required
-
-Three files in **[`build/`](build)**. In Studio, right-click a service in the
-Explorer, pick **Insert from File…**, choose the matching file:
-
-| File | Goes into |
-|---|---|
-| `DollysHome_ReplicatedStorage.rbxmx` | ReplicatedStorage |
-| `DollysHome_ServerScriptService.rbxmx` | ServerScriptService |
-| `DollysHome_StarterPlayerScripts.rbxmx` | StarterPlayer → StarterPlayerScripts |
-
-Press Play. That's the whole install.
-
-Step by step, including what the Explorer should look like afterwards:
-**[docs/INSTALL_NO_ROJO.md](docs/INSTALL_NO_ROJO.md)**
-
-<details>
-<summary>Prefer Rojo? (live sync while you edit)</summary>
+## Start here
 
 ```bash
 rokit install          # or: aftman install
-rojo serve             # then connect from the Rojo plugin in Studio
+rojo serve             # then connect from the Rojo plugin in Studio and press Play
 ```
 
-Full walkthrough: **[docs/SETUP.md](docs/SETUP.md)**. Rojo's advantage is that
-saving a file updates Studio instantly; the `.rbxmx` route means re-importing
-when the code changes. Both produce exactly the same hierarchy.
+Full walkthrough, including what to do if you've never used Rojo:
+**[docs/SETUP.md](docs/SETUP.md)**
 
-Regenerate the bundles after a code change with `python3 tools/build_rbxmx.py`.
+<details>
+<summary>No Rojo? Generate a place file instead.</summary>
+
+```bash
+python3 tools/build_rbxmx.py
+```
+
+Writes `build/DollysHome.rbxlx` — the whole game as one file you open directly
+in Studio — plus three `.rbxmx` bundles for adding the game to a place you
+already have. Step by step: **[docs/INSTALL_NO_ROJO.md](docs/INSTALL_NO_ROJO.md)**.
+
+Rojo is still the better workflow if you can get it going: saving a file updates
+Studio instantly, where the generated files have to be rebuilt and re-imported
+after every change. Both produce an identical hierarchy.
+
+`build/` is gitignored — it's derived from `src/`, so it's rebuilt on demand
+rather than committed.
 </details>
 
 It runs out of the box. The House builds itself from the layout in

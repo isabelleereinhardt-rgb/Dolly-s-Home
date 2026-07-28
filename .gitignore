@@ -1,14 +1,17 @@
-# Build output
+# Build output.
+#
+# `build/` holds generated Roblox files -- run `python3 tools/build_rbxmx.py` to
+# recreate them from src/ at any time. They are deliberately NOT committed: they
+# are a derived artifact of the source, and checking in a few hundred KB of
+# generated XML on every code change makes the history unreadable.
+/build/
 *.rbxl
 *.rbxlx
 *.rbxm
 *.rbxmx
 *.rbxl.lock
 *.rbxlx.lock
-
-# ...except the drag-and-drop bundles, which are the whole point of tools/build_rbxmx.py.
-# These are committed so they can be downloaded straight from GitHub.
-!build/*.rbxmx
+*.zip
 !build/*.rbxlx
 
 # Source archives produced with `git archive` for sharing. Regenerable from any
