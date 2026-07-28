@@ -29,6 +29,7 @@ local Util = require(Shared.Util)
 
 local MapService = require(script.Parent.MapService)
 local NoiseService = require(script.Parent.NoiseService)
+local Props = require(script.Parent.Parent.Build.Props)
 local TeamService = require(script.Parent.TeamService)
 
 local ObjectiveService = {}
@@ -47,7 +48,7 @@ type ObjectiveState = {
 local active: { [string]: ObjectiveState } = {}
 local order: { string } = {}
 local usedSpawns: { [BasePart]: boolean } = {}
-local spinners: { BasePart } = {}
+local spinners: { Instance } = {}
 local spinConnection: RBXScriptConnection? = nil
 local roundActive = false
 local rng = Random.new()
@@ -195,9 +196,32 @@ end
 -- Collectible items
 --==========================================================================
 
-local function makeItem(kind: string, position: Vector3, actionText: string): BasePart
-	local style = ITEM_STYLE[kind] or ITEM_STYLE.Potion
+--- Builds the actual modelled pickup for a task type, falling back to a plain
+--- glowing block for anything without a builder.
+local function buildPickup(kind: string, position: Vector3): BasePart
+	local builder = ({
+		Potion = Props.potionBottle,
+		Cross = Props.crossProp,
+		Mirror = Props.mirrorShard,
+	})[kind]
 
+	if builder then
+		local built = builder()
+		built.Name = `TaskItem_{kind}`
+		built.Parent = itemsFolder()
+		built:PivotTo(CFrame.new(position))
+		local anchor = built.PrimaryPart :: BasePart
+		-- A light on the pickup itself, so it reads across a dark room.
+		local style = ITEM_STYLE[kind] or ITEM_STYLE.Potion
+		local light = Instance.new("PointLight")
+		light.Color = style.Color
+		light.Brightness = 1.1
+		light.Range = 12
+		light.Parent = anchor
+		return anchor
+	end
+
+	local style = ITEM_STYLE[kind] or ITEM_STYLE.Potion
 	local item = Instance.new("Part")
 	item.Name = `TaskItem_{kind}`
 	item.Size = style.Size
@@ -207,13 +231,20 @@ local function makeItem(kind: string, position: Vector3, actionText: string): Ba
 	item.CanCollide = false
 	item.CFrame = CFrame.new(position)
 	item.Parent = itemsFolder()
-	CollectionService:AddTag(item, Tags.TaskItem)
 
 	local light = Instance.new("PointLight")
 	light.Color = style.Color
-	light.Brightness = 1.4
-	light.Range = 14
+	light.Brightness = 1.1
+	light.Range = 12
 	light.Parent = item
+	return item
+end
+
+local function makeItem(kind: string, position: Vector3, actionText: string): BasePart
+	local style = ITEM_STYLE[kind] or ITEM_STYLE.Potion
+
+	local item = buildPickup(kind, position)
+	CollectionService:AddTag(item, Tags.TaskItem)
 
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.Name = "CollectPrompt"
@@ -223,16 +254,29 @@ local function makeItem(kind: string, position: Vector3, actionText: string): Ba
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = item
 
-	table.insert(spinners, item)
+	-- Spin the whole model, not the anchor part inside it.
+	local parent = item.Parent
+	table.insert(spinners, (parent and parent:IsA("Model")) and parent or item)
+	return item
+end
+
+--- Pickups are now Models, so the thing to spin and destroy is the model, not
+--- the anchor part inside it. Falls back to the part for plain-block pickups.
+local function topOf(item: BasePart): Instance
+	local parent = item.Parent
+	if parent and parent:IsA("Model") then
+		return parent
+	end
 	return item
 end
 
 local function destroyItem(item: BasePart)
-	local index = table.find(spinners, item)
+	local top = topOf(item)
+	local index = table.find(spinners, top)
 	if index then
 		table.remove(spinners, index)
 	end
-	item:Destroy()
+	top:Destroy()
 end
 
 --==========================================================================
@@ -722,12 +766,18 @@ function ObjectiveService.beginRound(): string
 	setupNoisyTiles()
 	setupLoreNotes()
 
-	-- One shared spin loop for every floating pickup.
+	-- One shared spin loop for every floating pickup, models and bare parts
+	-- alike. PivotTo handles both; one connection handles all of them.
 	if not spinConnection then
 		spinConnection = RunService.Heartbeat:Connect(function(dt)
+			local turn = CFrame.Angles(0, dt * 1.6, 0)
 			for _, item in spinners do
 				if item.Parent then
-					item.CFrame = item.CFrame * CFrame.Angles(0, dt * 1.6, 0)
+					if item:IsA("Model") then
+						item:PivotTo(item:GetPivot() * turn)
+					elseif item:IsA("BasePart") then
+						item.CFrame = item.CFrame * turn
+					end
 				end
 			end
 		end)

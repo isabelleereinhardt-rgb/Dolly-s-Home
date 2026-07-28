@@ -294,17 +294,33 @@ local function build()
 		Parent = injuredList,
 	})
 
-	subtitle = Widgets.outlinedLabel("", {
+	--[[
+		Dialogue subtitles.
+
+		Moved well clear of the bottom of the screen: at -110 they landed inside
+		the map-vote panel during the intermission, and the flavour font at body
+		size with a heavy stroke turned into an unreadable smear over the game
+		world. Bigger text, a lighter stroke, and its own strip of screen.
+	]]
+	subtitle = Widgets.new("TextLabel", {
 		Name = "Subtitle",
 		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -110),
-		Size = UDim2.new(0, 640, 0, 28),
+		Position = UDim2.new(0.5, 0, 1, -260),
+		Size = UDim2.new(0, 720, 0, 34),
+		BackgroundTransparency = 1,
 		Font = Theme.Font.Flavour,
-		TextSize = Theme.TextSize.Body,
+		TextSize = Theme.TextSize.Title,
 		TextXAlignment = Enum.TextXAlignment.Center,
 		TextTransparency = 1,
 		TextColor3 = Theme.Colour.Bone,
 		Parent = gui,
+	}) :: TextLabel
+
+	Widgets.new("UIStroke", {
+		Color = Color3.new(0, 0, 0),
+		Thickness = 3,
+		Transparency = 0,
+		Parent = subtitle,
 	})
 end
 
@@ -379,13 +395,16 @@ function AlertController.start()
 		end
 	end)
 
-	-- Clear the teammate list between rounds.
+	-- Clear round-scoped chatter between rounds. Without this a killer's last
+	-- line, or Robby's, hangs around into the lobby.
 	Net.getState():GetAttributeChangedSignal(StateKeys.Game.Phase):Connect(function()
 		local phase = Net.getStateValue(StateKeys.Game.Phase, "")
 		if phase ~= StateKeys.Phase.Active then
 			for userId in injured do
 				removeInjured(userId)
 			end
+			subtitleToken += 1
+			subtitle.TextTransparency = 1
 		end
 	end)
 

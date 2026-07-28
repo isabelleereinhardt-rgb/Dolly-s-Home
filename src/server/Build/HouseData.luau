@@ -193,15 +193,16 @@ HouseData.Hides = {
 	{ f = "attic", t = "closet", p = { -18, 12 }, r = 0, n = "Attic trunk press" },
 } :: { Hide }
 
---- Mockup type -> the Kind attribute HidingService reads, plus the prop shape.
+--- Mockup type -> the Kind attribute HidingService reads for its prompt text.
+--- The geometry lives in Props.HideBuilders, keyed by the same type name.
 HouseData.HideShape = {
-	locker = { Kind = "Locker", size = Vector3.new(4, 9, 3), solid = true, mat = "metal" },
-	closet = { Kind = "Closet", size = Vector3.new(6, 10, 4), solid = true, mat = "woodDark" },
-	bed = { Kind = "Bed", size = Vector3.new(8, 3, 12), solid = false, mat = "cloth" },
-	table = { Kind = "Table", size = Vector3.new(11, 4, 6), solid = false, mat = "woodDark" },
-	duct = { Kind = "Duct", size = Vector3.new(5, 4, 5), solid = true, mat = "metal" },
-	bathtub = { Kind = "Bathtub", size = Vector3.new(6, 3.5, 11), solid = false, mat = "tile" },
-	barrel = { Kind = "Barrel", size = Vector3.new(4.5, 6, 4.5), solid = true, mat = "woodDark" },
+	locker = { Kind = "Locker" },
+	closet = { Kind = "Closet" },
+	bed = { Kind = "Bed" },
+	table = { Kind = "Table" },
+	duct = { Kind = "Duct" },
+	bathtub = { Kind = "Bathtub" },
+	barrel = { Kind = "Barrel" },
 }
 
 --==========================================================================

@@ -34,18 +34,27 @@ local StateKeys = require(Shared.StateKeys)
 	Studio-only on some versions) can't take the rest down with it.
 ]]
 local function applyAtmosphere()
+	--[[
+		Fog is the single biggest lever on how this reads.
+
+		The first pass used FogEnd = 260, which does nothing at all indoors --
+		the whole house is only 116 x 88 studs, so you are never far enough from
+		anything for fog to engage. Pulling it in to 85 means a corridor fades
+		to black about a room and a half away, which is exactly the distance at
+		which "something is down there" beats "there is nothing down there".
+	]]
 	local lightingProps = {
-		Ambient = Color3.fromRGB(13, 13, 18),
-		OutdoorAmbient = Color3.fromRGB(23, 26, 33),
-		Brightness = 1,
+		Ambient = Color3.fromRGB(8, 8, 11),
+		OutdoorAmbient = Color3.fromRGB(14, 16, 22),
+		Brightness = 0.35,
 		ClockTime = 0,
 		GeographicLatitude = 30,
-		FogColor = Color3.fromRGB(23, 26, 23),
-		FogStart = 40,
-		FogEnd = 260,
+		FogColor = Color3.fromRGB(10, 11, 12),
+		FogStart = 12,
+		FogEnd = 85,
 		GlobalShadows = true,
-		EnvironmentDiffuseScale = 0.35,
-		EnvironmentSpecularScale = 0.2,
+		EnvironmentDiffuseScale = 0.12,
+		EnvironmentSpecularScale = 0.08,
 		Technology = Enum.Technology.ShadowMap,
 	}
 
@@ -54,6 +63,31 @@ local function applyAtmosphere()
 			(Lighting :: any)[property] = value
 		end)
 	end
+
+	-- Haze, so light has something to fall through and distance actually reads.
+	pcall(function()
+		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
+		atmosphere.Density = 0.42
+		atmosphere.Offset = 0.1
+		atmosphere.Color = Color3.fromRGB(140, 140, 132)
+		atmosphere.Decay = Color3.fromRGB(58, 62, 55)
+		atmosphere.Glare = 0.1
+		atmosphere.Haze = 1.6
+		atmosphere.Parent = Lighting
+	end)
+
+	-- Drain the colour a little and crush the blacks. The mockup's palette is
+	-- already muted; this stops Roblox's renderer brightening it back up.
+	pcall(function()
+		local grade = Lighting:FindFirstChild("DollysHomeGrade") :: ColorCorrectionEffect?
+			or Instance.new("ColorCorrectionEffect")
+		grade.Name = "DollysHomeGrade"
+		grade.Brightness = -0.06
+		grade.Contrast = 0.16
+		grade.Saturation = -0.22
+		grade.TintColor = Color3.fromRGB(226, 226, 236)
+		grade.Parent = Lighting
+	end)
 
 	-- Players who reset come back to the lobby; three seconds is long enough to
 	-- read the results screen but short enough not to feel like a punishment.

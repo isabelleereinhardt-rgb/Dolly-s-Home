@@ -79,6 +79,9 @@ Config.Noise = {
 	-- Decay (per second)
 	DecayIdle = 0.5,
 	DecayCrouched = 0.3,
+	-- Hiding settles you fast, so a locker feels like relief rather than a
+	-- two-minute wait for the meter to come down.
+	DecayHidden = 6,
 
 	-- Detection tiers. `Range` is how far a killer can hear a player sitting at
 	-- that noise level, before the killer's own hearing multiplier is applied.

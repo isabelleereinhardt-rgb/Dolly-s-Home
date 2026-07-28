@@ -276,6 +276,14 @@ local function step(dt: number)
 			levels[player] = math.clamp(level + generated * dt, 0, Config.Noise.Max)
 		else
 			local decay = isCrouching and Config.Noise.DecayCrouched or Config.Noise.DecayIdle
+			-- Hiding settles you fast. At the normal 0.5/second, ducking into a
+			-- locker after a sprint left the meter screaming DEAFENING for two
+			-- minutes while you sat there perfectly safe -- alarming, wrong, and
+			-- it made the one mechanic that should feel like relief feel like a
+			-- countdown.
+			if hidden then
+				decay = Config.Noise.DecayHidden
+			end
 			levels[player] = math.max(0, level - decay * dt)
 		end
 

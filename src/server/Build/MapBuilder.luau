@@ -29,6 +29,7 @@ local Util = require(Shared.Util)
 
 local HouseData = require(script.Parent.HouseData)
 local Primitives = require(script.Parent.Primitives)
+local Props = require(script.Parent.Props)
 
 local MapBuilder = {}
 
@@ -187,23 +188,32 @@ local function buildHides(parent: Instance)
 	local hides = folder("HidingSpots", parent)
 
 	for index, hide in HouseData.Hides do
+		local builder = Props.HideBuilders[hide.t]
 		local shape = HouseData.HideShape[hide.t]
-		if not shape then
+		if not builder or not shape then
 			Util.warn("MapBuilder", 'unknown hiding spot type "%s"', hide.t)
 			continue
 		end
 
-		local position = HouseData.toWorld(hide.f, hide.p, shape.size.Y / 2)
-		local part = Primitives.part(`Hide_{shape.Kind}_{index}`, shape.mat, position, shape.size, hide.r, hides)
+		local built = builder()
+		built.Name = `Hide_{shape.Kind}_{index}`
+		built.Parent = hides
+		-- Builders put their origin on the floor facing +Z, so the mockup's
+		-- rotation applies directly.
+		built:PivotTo(CFrame.new(HouseData.toWorld(hide.f, hide.p, 0)) * CFrame.Angles(0, hide.r, 0))
 
-		-- Beds, tables and bathtubs are hidden *under* or *in*, so players have
-		-- to be able to walk into them. Lockers and closets are solid.
-		part.CanCollide = shape.solid
+		-- The interior volume is what carries the tag: the space you hide in,
+		-- rather than the cabinet around it.
+		local volume = built.PrimaryPart
+		if not volume then
+			Util.warn("MapBuilder", "hiding spot %s has no hide volume", built.Name)
+			continue
+		end
 
-		part:SetAttribute("Kind", shape.Kind)
-		part:SetAttribute("Zone", HouseData.zoneAt(hide.f, hide.p[1], hide.p[2]))
-		part:SetAttribute("Label", hide.n)
-		CollectionService:AddTag(part, Tags.HidingSpot)
+		volume:SetAttribute("Kind", shape.Kind)
+		volume:SetAttribute("Zone", HouseData.zoneAt(hide.f, hide.p[1], hide.p[2]))
+		volume:SetAttribute("Label", hide.n)
+		CollectionService:AddTag(volume, Tags.HidingSpot)
 	end
 end
 
@@ -296,70 +306,43 @@ local function buildObjectiveProps(parent: Instance)
 	local props = folder("Objectives", parent)
 
 	for _, pin in HouseData.TaskPins do
-		local position = HouseData.toWorld(pin.f, pin.p, 2)
+		local ground = CFrame.new(HouseData.toWorld(pin.f, pin.p, 0))
+		local zone = HouseData.zoneAt(pin.f, pin.p[1], pin.p[2])
 
 		if pin.k == "clock" then
-			local clock = Primitives.part(
-				"GrandfatherClock",
-				"woodDark",
-				position + Vector3.new(0, 5, 0),
-				Vector3.new(4, 14, 3),
-				0,
-				props
-			)
-			clock:SetAttribute("Zone", HouseData.zoneAt(pin.f, pin.p[1], pin.p[2]))
-			CollectionService:AddTag(clock, Tags.Clock)
+			local clock = Props.grandfatherClock()
+			clock.Parent = props
+			clock:PivotTo(ground)
+			local anchor = clock.PrimaryPart :: BasePart
+			anchor:SetAttribute("Zone", zone)
+			CollectionService:AddTag(anchor, Tags.Clock)
 		else
-			local ingredientId = Palette.IngredientId[pin.k]
-			local pedestal = Primitives.part(
-				`Ingredient_{ingredientId}`,
-				"stone",
-				position,
-				Vector3.new(3, 4, 3),
-				0,
-				props
-			)
-			pedestal:SetAttribute("Ingredient", ingredientId)
-			pedestal:SetAttribute("Zone", HouseData.zoneAt(pin.f, pin.p[1], pin.p[2]))
-			CollectionService:AddTag(pedestal, Tags.IngredientSpawn)
-
-			-- A glowing sample sitting on it, in the ingredient's own colour.
-			local sample = Primitives.sph(
-				`IngredientGlow_{ingredientId}`,
-				Palette.Ingredient[pin.k],
-				position + Vector3.new(0, 3, 0),
-				1.1,
-				nil,
-				props
-			)
-			sample.CanCollide = false
+			local built = Props.ingredientProp(pin.k)
+			built.Parent = props
+			built:PivotTo(ground)
+			local anchor = built.PrimaryPart :: BasePart
+			anchor:SetAttribute("Ingredient", Palette.IngredientId[pin.k])
+			anchor:SetAttribute("Zone", zone)
+			CollectionService:AddTag(anchor, Tags.IngredientSpawn)
 		end
 	end
 
-	-- Ritual table.
-	local ritual = Primitives.part(
-		"RitualTable",
-		"blood",
-		HouseData.toWorld(HouseData.RitualTable.f, HouseData.RitualTable.p, 2),
-		Vector3.new(10, 4, 6),
-		0,
-		props
-	)
-	ritual:SetAttribute("Zone", "RitualRoom")
-	CollectionService:AddTag(ritual, Tags.RitualTable)
+	-- The altar, with its five candles and four ingredient slots.
+	local ritual = Props.ritualTable()
+	ritual.Parent = props
+	ritual:PivotTo(CFrame.new(HouseData.toWorld(HouseData.RitualTable.f, HouseData.RitualTable.p, 0)))
+	local altar = ritual.PrimaryPart :: BasePart
+	altar:SetAttribute("Zone", "RitualRoom")
+	CollectionService:AddTag(altar, Tags.RitualTable)
 
-	-- Fuse boxes.
 	for index, fuse in HouseData.FuseBoxes do
-		local box = Primitives.part(
-			`FuseBox_{index}`,
-			"metal",
-			HouseData.toWorld(fuse.f, fuse.p, 6),
-			Vector3.new(3, 4, 1.5),
-			0,
-			props
-		)
-		box:SetAttribute("Zone", HouseData.zoneAt(fuse.f, fuse.p[1], fuse.p[2]))
-		CollectionService:AddTag(box, Tags.FuseBox)
+		local built = Props.fuseBox()
+		built.Name = `FuseBox_{index}`
+		built.Parent = props
+		built:PivotTo(CFrame.new(HouseData.toWorld(fuse.f, fuse.p, 4)))
+		local anchor = built.PrimaryPart :: BasePart
+		anchor:SetAttribute("Zone", HouseData.zoneAt(fuse.f, fuse.p[1], fuse.p[2]))
+		CollectionService:AddTag(anchor, Tags.FuseBox)
 	end
 end
 
@@ -494,29 +477,64 @@ local function buildDressing(parent: Instance)
 	end
 end
 
+--[[
+	Light.
+
+	The first pass put a candle in every room with a range scaled to the room,
+	which flood-lit the whole house and made it read like an office. Horror
+	lighting is the opposite: light has to be SCARCE and LOCAL, so that most of
+	any room is dark and you're moving between small pools of it.
+
+	So: only some rooms get a candle, the range is short and fixed rather than
+	room-sized, and every candle sits low on a wall instead of centred on the
+	ceiling. What that buys is a room you can't read at a glance, and killers
+	whose glowing eyes are the brightest thing in it -- which is what those eyes
+	were designed for.
+]]
+local LIT_ROOMS = {
+	foyer = true,
+	library = true,
+	kitchen = true,
+	ritual = true,
+	landing = true,
+	master = true,
+	study = true,
+	cellar = true,
+	boilerR = true,
+	attic = true,
+}
+
 local function buildAtmosphere(parent: Instance)
 	local lights = folder("Lighting", parent)
 	local rng = Random.new(20250728)
 
 	for _, room in HouseData.Rooms do
-		local centre = Vector3.new(
-			(room.x0 + room.x1) / 2,
-			HouseData.FloorY[room.f] + HouseData.WallHeight[room.f] - 2.5,
-			(room.z0 + room.z1) / 2
+		if not LIT_ROOMS[room.id] then
+			continue
+		end
+
+		-- Against a wall, at head height -- not a ceiling fixture.
+		local position = Vector3.new(
+			room.x0 + 3,
+			HouseData.FloorY[room.f] + 6,
+			(room.z0 + room.z1) / 2 + rng:NextNumber(-6, 6)
 		)
 
-		local candle = Primitives.sph(`Candle_{room.id}`, "flame", centre, 0.5, nil, lights)
+		local sconce = Primitives.part(`Sconce_{room.id}`, "brass", position, Vector3.new(0.8, 1.4, 0.8), 0, lights)
+		sconce.CanCollide = false
+
+		local candle = Primitives.sph(`Candle_{room.id}`, "flame", position + Vector3.new(0, 1, 0), 0.22, Vector3.new(1, 1.6, 1), lights)
 		candle.CanCollide = false
 
 		local light = candle:FindFirstChildOfClass("PointLight")
 		if light then
-			light.Range = math.max(room.x1 - room.x0, room.z1 - room.z0) * 0.75
+			light.Range = 15 -- fixed and short: a pool, not room-wide coverage
+			light.Brightness = 0.9
 			light.Shadows = true
 
-			-- Flicker. Cheap, and it sells the whole thing.
 			task.spawn(function()
 				while candle.Parent do
-					light.Brightness = rng:NextNumber(1.4, 2.6)
+					light.Brightness = rng:NextNumber(0.6, 1.1)
 					task.wait(rng:NextNumber(0.08, 0.4))
 				end
 			end)

@@ -101,9 +101,12 @@ local function buildTopBar(parent: Instance)
 end
 
 local function buildObjectiveTracker(parent: Instance)
+	-- Pushed well down the left edge: Roblox's own chat window and its system
+	-- messages ("You are now on the Survivors team") live at the top-left and
+	-- were sitting straight on top of this.
 	local panel = Widgets.panel({
 		Name = "Objectives",
-		Position = UDim2.new(0, 16, 0, Theme.TopBarInset),
+		Position = UDim2.new(0, 16, 0, Theme.TopBarInset + 210),
 		Size = UDim2.new(0, 250, 0, 40),
 		BackgroundTransparency = 0.25,
 		AutomaticSize = Enum.AutomaticSize.Y,
@@ -202,16 +205,25 @@ local function buildStakeReadout(parent: Instance)
 	})
 end
 
+--[[
+	The state line -- hidden, injured, safe.
+
+	Kept deliberately quiet: small, sentence case, sitting below the centre of
+	the screen rather than shouting in gold caps under the timer. It is a
+	reminder of what you already know, not an announcement, and at the old size
+	it competed with the round timer for attention every time you ducked into a
+	locker.
+]]
 local function buildStatusBanner(parent: Instance)
 	statusLabel = Widgets.outlinedLabel("", {
 		Name = "Status",
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, Theme.TopBarInset + 80),
-		Size = UDim2.new(0, 520, 0, 32),
-		Font = Theme.Font.Heading,
-		TextSize = Theme.TextSize.Heading,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.62, 0),
+		Size = UDim2.new(0, 460, 0, 22),
+		Font = Theme.Font.Body,
+		TextSize = Theme.TextSize.Small,
 		TextXAlignment = Enum.TextXAlignment.Center,
-		TextColor3 = Theme.Colour.Gold,
+		TextColor3 = Theme.Colour.Bone,
 		TextTransparency = 1,
 		Parent = parent,
 	})
@@ -346,17 +358,17 @@ local function updateStatus()
 	if player:GetAttribute(StateKeys.Player.Injured) == true then
 		local endsAt = (player:GetAttribute(StateKeys.Player.ReviveEndsAt) :: number?) or 0
 		local remaining = math.max(0, math.ceil(endsAt - Util.now()))
-		text = `YOU ARE INJURED  -  {remaining}s  -  CALL FOR HELP`
+		text = `You're bleeding out — {remaining}s`
 		colour = Theme.Colour.CrimsonBright
 	elseif player:GetAttribute(StateKeys.Player.Eliminated) == true then
-		text = "ELIMINATED  -  SPECTATING"
-		colour = Theme.Colour.TextDim
+		text = "Spectating"
+		colour = Theme.Colour.TextFaint
 	elseif player:GetAttribute(StateKeys.Player.InSafeZone) == true then
-		text = "SANCTIFIED GROUND  -  THEY CANNOT REACH YOU HERE"
+		text = "Sanctified ground — they can't reach you here"
 		colour = Theme.Colour.Gold
 	elseif player:GetAttribute(StateKeys.Player.Hidden) == true then
-		local kind = (player:GetAttribute(StateKeys.Player.HidingKind) :: string?) or "Spot"
-		text = `HIDDEN ({kind})  -  PRESS E OR Q TO COME OUT`
+		local kind = (player:GetAttribute(StateKeys.Player.HidingKind) :: string?) or "spot"
+		text = `Hidden in the {string.lower(kind)} — Q to come out`
 		colour = Theme.Colour.Bone
 	end
 
