@@ -165,29 +165,60 @@ def build_place() -> str:
     Emits a complete .rbxlx place file -- the whole game as one document you
     open in Studio, no importing at all.
 
-    Only the script containers are written. Lighting, Players.RespawnTime and
-    everything else are applied at runtime by init.server.luau, and the map and
-    lobby are built procedurally on startup, so there is no geometry to encode
-    here.
+    Every standard service is written out, even the empty ones. Studio will
+    generally create a missing service on load, but "generally" is not a good
+    bet for the file someone double-clicks expecting a working game, and an
+    empty <Item> costs three lines.
+
+    No geometry is encoded: Lighting and Players.RespawnTime are applied at
+    runtime by init.server.luau, and the lobby and House are built procedurally
+    on startup. That keeps this file readable XML rather than a binary blob.
     """
     services: list[str] = []
 
-    def service(class_name: str, children: list[str]) -> str:
-        return emit_item(class_name, class_name, None, children, 1)
+    def service(class_name: str, children: list[str] | None = None) -> str:
+        return emit_item(class_name, class_name, None, children or [], 1)
 
-    # Workspace, Players, Lighting and friends are created by Studio when it
-    # opens a place that omits them, so only the ones holding our code matter.
-    services.append(service("ReplicatedStorage", [build_directory(SRC / "shared", "Shared", 2)]))
-    services.append(service("ServerScriptService", [build_directory(SRC / "server", "DollysHome", 2)]))
-
-    starter_scripts = emit_item(
-        "StarterPlayerScripts",
-        "StarterPlayerScripts",
-        None,
-        [build_directory(SRC / "client", "DollysHomeClient", 3)],
-        2,
+    # Workspace needs its Camera and Terrain, which Studio expects to exist.
+    services.append(
+        service(
+            "Workspace",
+            [
+                emit_item("Camera", "Camera", None, [], 2),
+                emit_item("Terrain", "Terrain", None, [], 2),
+            ],
+        )
     )
-    services.append(service("StarterPlayer", [starter_scripts]))
+
+    services.append(service("Lighting"))
+    services.append(service("Players"))
+    services.append(service("ReplicatedStorage", [build_directory(SRC / "shared", "Shared", 2)]))
+    services.append(service("ReplicatedFirst"))
+    services.append(service("ServerScriptService", [build_directory(SRC / "server", "DollysHome", 2)]))
+    # ServerStorage is where hand-built maps and killer rigs go later.
+    services.append(service("ServerStorage"))
+    services.append(service("StarterGui"))
+    services.append(service("StarterPack"))
+
+    services.append(
+        service(
+            "StarterPlayer",
+            [
+                emit_item(
+                    "StarterPlayerScripts",
+                    "StarterPlayerScripts",
+                    None,
+                    [build_directory(SRC / "client", "DollysHomeClient", 3)],
+                    2,
+                ),
+                emit_item("StarterCharacterScripts", "StarterCharacterScripts", None, [], 2),
+            ],
+        )
+    )
+
+    services.append(service("SoundService"))
+    # TeamService creates the two teams at runtime; the service must exist first.
+    services.append(service("Teams"))
 
     return f"{HEADER}\n" + "\n".join(services) + "\n</roblox>\n"
 

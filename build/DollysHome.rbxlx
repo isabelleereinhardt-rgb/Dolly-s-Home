@@ -1,13 +1,38 @@
 <roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
-	<Item class="ReplicatedStorage" referent="RBX60">
+	<Item class="Workspace" referent="RBX52">
+		<Properties>
+			<string name="Name">Workspace</string>
+		</Properties>
+		<Item class="Camera" referent="RBX50">
+			<Properties>
+				<string name="Name">Camera</string>
+			</Properties>
+		</Item>
+		<Item class="Terrain" referent="RBX51">
+			<Properties>
+				<string name="Name">Terrain</string>
+			</Properties>
+		</Item>
+	</Item>
+	<Item class="Lighting" referent="RBX53">
+		<Properties>
+			<string name="Name">Lighting</string>
+		</Properties>
+	</Item>
+	<Item class="Players" referent="RBX54">
+		<Properties>
+			<string name="Name">Players</string>
+		</Properties>
+	</Item>
+	<Item class="ReplicatedStorage" referent="RBX65">
 		<Properties>
 			<string name="Name">ReplicatedStorage</string>
 		</Properties>
-		<Item class="Folder" referent="RBX59">
+		<Item class="Folder" referent="RBX64">
 			<Properties>
 				<string name="Name">Shared</string>
 			</Properties>
-			<Item class="ModuleScript" referent="RBX50">
+			<Item class="ModuleScript" referent="RBX55">
 				<Properties>
 					<string name="Name">Config</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -399,7 +424,7 @@ return Config
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX51">
+			<Item class="ModuleScript" referent="RBX56">
 				<Properties>
 					<string name="Name">KillerData</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -682,7 +707,7 @@ return KillerData
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX52">
+			<Item class="ModuleScript" referent="RBX57">
 				<Properties>
 					<string name="Name">Net</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -898,7 +923,7 @@ return Net
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX53">
+			<Item class="ModuleScript" referent="RBX58">
 				<Properties>
 					<string name="Name">ObjectiveData</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -1089,7 +1114,7 @@ return ObjectiveData
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX54">
+			<Item class="ModuleScript" referent="RBX59">
 				<Properties>
 					<string name="Name">Palette</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -1242,7 +1267,7 @@ return Palette
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX55">
+			<Item class="ModuleScript" referent="RBX60">
 				<Properties>
 					<string name="Name">Sounds</string>
 					<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -1348,7 +1373,7 @@ return Sounds
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX56">
+			<Item class="ModuleScript" referent="RBX61">
 				<Properties>
 					<string name="Name">StateKeys</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -1435,7 +1460,7 @@ return StateKeys
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX57">
+			<Item class="ModuleScript" referent="RBX62">
 				<Properties>
 					<string name="Name">Tags</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -1493,7 +1518,7 @@ return Tags
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX58">
+			<Item class="ModuleScript" referent="RBX63">
 				<Properties>
 					<string name="Name">Util</string>
 					<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -1703,11 +1728,16 @@ return Util
 			</Item>
 		</Item>
 	</Item>
-	<Item class="ServerScriptService" referent="RBX87">
+	<Item class="ReplicatedFirst" referent="RBX66">
+		<Properties>
+			<string name="Name">ReplicatedFirst</string>
+		</Properties>
+	</Item>
+	<Item class="ServerScriptService" referent="RBX93">
 		<Properties>
 			<string name="Name">ServerScriptService</string>
 		</Properties>
-		<Item class="Script" referent="RBX86">
+		<Item class="Script" referent="RBX92">
 			<Properties>
 				<string name="Name">DollysHome</string>
 				<ProtectedString name="Source"><![CDATA[--!strict
@@ -1830,11 +1860,11 @@ print(
 )
 ]]></ProtectedString>
 			</Properties>
-			<Item class="Folder" referent="RBX62">
+			<Item class="Folder" referent="RBX68">
 				<Properties>
 					<string name="Name">AI</string>
 				</Properties>
-				<Item class="ModuleScript" referent="RBX61">
+				<Item class="ModuleScript" referent="RBX67">
 					<Properties>
 						<string name="Name">KillerAgent</string>
 						<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -2529,11 +2559,11 @@ return KillerAgent
 					</Properties>
 				</Item>
 			</Item>
-			<Item class="Folder" referent="RBX67">
+			<Item class="Folder" referent="RBX73">
 				<Properties>
 					<string name="Name">Build</string>
 				</Properties>
-				<Item class="ModuleScript" referent="RBX63">
+				<Item class="ModuleScript" referent="RBX69">
 					<Properties>
 						<string name="Name">HouseData</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -2935,7 +2965,7 @@ return HouseData
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX64">
+				<Item class="ModuleScript" referent="RBX70">
 					<Properties>
 						<string name="Name">MapBuilder</string>
 						<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -3618,7 +3648,7 @@ return MapBuilder
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX65">
+				<Item class="ModuleScript" referent="RBX71">
 					<Properties>
 						<string name="Name">Primitives</string>
 						<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -3966,7 +3996,7 @@ return Primitives
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX66">
+				<Item class="ModuleScript" referent="RBX72">
 					<Properties>
 						<string name="Name">RigBuilder</string>
 						<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -4182,11 +4212,11 @@ return RigBuilder
 					</Properties>
 				</Item>
 			</Item>
-			<Item class="Folder" referent="RBX85">
+			<Item class="Folder" referent="RBX91">
 				<Properties>
 					<string name="Name">Services</string>
 				</Properties>
-				<Item class="ModuleScript" referent="RBX68">
+				<Item class="ModuleScript" referent="RBX74">
 					<Properties>
 						<string name="Name">AvaService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -4330,7 +4360,7 @@ return AvaService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX69">
+				<Item class="ModuleScript" referent="RBX75">
 					<Properties>
 						<string name="Name">CombatService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -4523,7 +4553,7 @@ return CombatService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX70">
+				<Item class="ModuleScript" referent="RBX76">
 					<Properties>
 						<string name="Name">DataService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -4990,7 +5020,7 @@ return DataService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX71">
+				<Item class="ModuleScript" referent="RBX77">
 					<Properties>
 						<string name="Name">GameStateManager</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -5424,7 +5454,7 @@ return GameStateManager
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX72">
+				<Item class="ModuleScript" referent="RBX78">
 					<Properties>
 						<string name="Name">HelperService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -5699,7 +5729,7 @@ return HelperService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX73">
+				<Item class="ModuleScript" referent="RBX79">
 					<Properties>
 						<string name="Name">HidingService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -6078,7 +6108,7 @@ return HidingService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX74">
+				<Item class="ModuleScript" referent="RBX80">
 					<Properties>
 						<string name="Name">KillerService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -6300,7 +6330,7 @@ return KillerService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX75">
+				<Item class="ModuleScript" referent="RBX81">
 					<Properties>
 						<string name="Name">MapService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -6708,7 +6738,7 @@ return MapService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX76">
+				<Item class="ModuleScript" referent="RBX82">
 					<Properties>
 						<string name="Name">NoiseService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -7040,7 +7070,7 @@ return NoiseService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX77">
+				<Item class="ModuleScript" referent="RBX83">
 					<Properties>
 						<string name="Name">ObjectiveService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -7864,7 +7894,7 @@ return ObjectiveService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX78">
+				<Item class="ModuleScript" referent="RBX84">
 					<Properties>
 						<string name="Name">PlayerService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -8081,7 +8111,7 @@ return PlayerService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX79">
+				<Item class="ModuleScript" referent="RBX85">
 					<Properties>
 						<string name="Name">RevivalService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -8564,7 +8594,7 @@ return RevivalService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX80">
+				<Item class="ModuleScript" referent="RBX86">
 					<Properties>
 						<string name="Name">SafeZoneService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -8698,7 +8728,7 @@ return SafeZoneService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX81">
+				<Item class="ModuleScript" referent="RBX87">
 					<Properties>
 						<string name="Name">ShopService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -8950,7 +8980,7 @@ return ShopService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX82">
+				<Item class="ModuleScript" referent="RBX88">
 					<Properties>
 						<string name="Name">StatsService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -9134,7 +9164,7 @@ return StatsService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX83">
+				<Item class="ModuleScript" referent="RBX89">
 					<Properties>
 						<string name="Name">TeamService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -9326,7 +9356,7 @@ return TeamService
 ]]></ProtectedString>
 					</Properties>
 				</Item>
-				<Item class="ModuleScript" referent="RBX84">
+				<Item class="ModuleScript" referent="RBX90">
 					<Properties>
 						<string name="Name">VoteService</string>
 						<ProtectedString name="Source"><![CDATA[--!strict
@@ -9476,15 +9506,30 @@ return VoteService
 			</Item>
 		</Item>
 	</Item>
-	<Item class="StarterPlayer" referent="RBX102">
+	<Item class="ServerStorage" referent="RBX94">
+		<Properties>
+			<string name="Name">ServerStorage</string>
+		</Properties>
+	</Item>
+	<Item class="StarterGui" referent="RBX95">
+		<Properties>
+			<string name="Name">StarterGui</string>
+		</Properties>
+	</Item>
+	<Item class="StarterPack" referent="RBX96">
+		<Properties>
+			<string name="Name">StarterPack</string>
+		</Properties>
+	</Item>
+	<Item class="StarterPlayer" referent="RBX112">
 		<Properties>
 			<string name="Name">StarterPlayer</string>
 		</Properties>
-		<Item class="StarterPlayerScripts" referent="RBX101">
+		<Item class="StarterPlayerScripts" referent="RBX110">
 			<Properties>
 				<string name="Name">StarterPlayerScripts</string>
 			</Properties>
-			<Item class="LocalScript" referent="RBX100">
+			<Item class="LocalScript" referent="RBX109">
 				<Properties>
 					<string name="Name">DollysHomeClient</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -9542,11 +9587,11 @@ end
 print("[DollysHome] client ready.")
 ]]></ProtectedString>
 				</Properties>
-				<Item class="Folder" referent="RBX96">
+				<Item class="Folder" referent="RBX105">
 					<Properties>
 						<string name="Name">Controllers</string>
 					</Properties>
-					<Item class="ModuleScript" referent="RBX88">
+					<Item class="ModuleScript" referent="RBX97">
 						<Properties>
 							<string name="Name">AlertController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -9952,7 +9997,7 @@ return AlertController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX89">
+					<Item class="ModuleScript" referent="RBX98">
 						<Properties>
 							<string name="Name">AudioController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -10206,7 +10251,7 @@ return AudioController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX90">
+					<Item class="ModuleScript" referent="RBX99">
 						<Properties>
 							<string name="Name">HudController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -10696,7 +10741,7 @@ return HudController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX91">
+					<Item class="ModuleScript" referent="RBX100">
 						<Properties>
 							<string name="Name">InputController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -10896,7 +10941,7 @@ return InputController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX92">
+					<Item class="ModuleScript" referent="RBX101">
 						<Properties>
 							<string name="Name">ModalController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -11453,7 +11498,7 @@ return ModalController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX93">
+					<Item class="ModuleScript" referent="RBX102">
 						<Properties>
 							<string name="Name">ResultsController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -11826,7 +11871,7 @@ return ResultsController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX94">
+					<Item class="ModuleScript" referent="RBX103">
 						<Properties>
 							<string name="Name">SpectateController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -12071,7 +12116,7 @@ return SpectateController
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX95">
+					<Item class="ModuleScript" referent="RBX104">
 						<Properties>
 							<string name="Name">VoteController</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -12332,11 +12377,11 @@ return VoteController
 						</Properties>
 					</Item>
 				</Item>
-				<Item class="Folder" referent="RBX99">
+				<Item class="Folder" referent="RBX108">
 					<Properties>
 						<string name="Name">UI</string>
 					</Properties>
-					<Item class="ModuleScript" referent="RBX97">
+					<Item class="ModuleScript" referent="RBX106">
 						<Properties>
 							<string name="Name">Theme</string>
 							<ProtectedString name="Source"><![CDATA[--!strict
@@ -12483,7 +12528,7 @@ return Theme
 ]]></ProtectedString>
 						</Properties>
 					</Item>
-					<Item class="ModuleScript" referent="RBX98">
+					<Item class="ModuleScript" referent="RBX107">
 						<Properties>
 							<string name="Name">Widgets</string>
 							<ProtectedString name="Source"><![CDATA[--!nonstrict
@@ -12786,5 +12831,20 @@ return Widgets
 				</Item>
 			</Item>
 		</Item>
+		<Item class="StarterCharacterScripts" referent="RBX111">
+			<Properties>
+				<string name="Name">StarterCharacterScripts</string>
+			</Properties>
+		</Item>
+	</Item>
+	<Item class="SoundService" referent="RBX113">
+		<Properties>
+			<string name="Name">SoundService</string>
+		</Properties>
+	</Item>
+	<Item class="Teams" referent="RBX114">
+		<Properties>
+			<string name="Name">Teams</string>
+		</Properties>
 	</Item>
 </roblox>
