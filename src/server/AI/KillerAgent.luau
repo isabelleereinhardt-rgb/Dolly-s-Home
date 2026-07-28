@@ -127,7 +127,9 @@ function KillerAgent.new(killerId: string, model: Model): Agent?
 	self.lastAttackAt = 0
 	self.lastLineAt = 0
 
-	self.patrolNodes = MapService.getPatrolNodes(profile.PatrolZones, profile.CanUseCrawlspaces)
+	-- Passing the id gets this killer their hand-authored route from the map
+	-- data, in order, rather than a guess from room names.
+	self.patrolNodes = MapService.getPatrolNodes(killerId, profile.PatrolZones, profile.CanUseCrawlspaces)
 	self.patrolIndex = 1
 	self.rng = Random.new()
 
@@ -366,7 +368,8 @@ end
 
 function KillerAgent:_pickPatrolDestination()
 	if #self.patrolNodes == 0 then
-		self.patrolNodes = MapService.getPatrolNodes(self.profile.PatrolZones, self.profile.CanUseCrawlspaces)
+		self.patrolNodes =
+			MapService.getPatrolNodes(self.killerId, self.profile.PatrolZones, self.profile.CanUseCrawlspaces)
 		if #self.patrolNodes == 0 then
 			return
 		end

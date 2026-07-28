@@ -279,6 +279,8 @@ local function attachPrompt(spot: Instance)
 		Bed = "Hide Under Bed",
 		Table = "Hide Under Table",
 		Duct = "Crawl into Duct",
+		Bathtub = "Hide in Bathtub",
+		Barrel = "Hide in Barrel",
 	})[kind] or "Hide"
 
 	local prompt = Instance.new("ProximityPrompt")

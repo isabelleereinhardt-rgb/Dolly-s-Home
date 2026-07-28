@@ -270,47 +270,69 @@ function MapService.getLoreNotes(): { BasePart }
 end
 
 --[[
-	Patrol nodes for a killer.
+	Patrol nodes for a killer, in the order they should be walked.
 
-	Nodes tagged with the killer's preferred zones come first; if that killer's
-	zones don't exist on this map (very likely on a map you built by hand
-	without matching zone names) it falls back to every node, so patrols always
-	work rather than silently doing nothing.
+	Three tiers, best first:
+
+	  1. A DESIGNED ROUTE -- nodes carrying `Killer = <id>`, sorted by their
+	     `Order` attribute. This is what the House ships with: a hand-authored
+	     loop per killer, so Barbara really does prowl the kitchen and Robert
+	     really does haunt the study.
+	  2. ZONE MATCH -- nodes whose `Zone` is one of the killer's preferred rooms
+	     from KillerData. This is the fallback for a hand-built map that tagged
+	     zones but not routes.
+	  3. EVERYTHING -- so a map with bare untagged nodes still produces patrols
+	     rather than killers standing still.
 
 	Crawlspace nodes are filtered out unless the killer can use them.
 ]]
-function MapService.getPatrolNodes(zones: { string }?, canUseCrawlspaces: boolean?): { BasePart }
-	local all = MapService.getTaggedParts(Tags.PatrolNode)
-
+function MapService.getPatrolNodes(killerId: string?, zones: { string }?, canUseCrawlspaces: boolean?): { BasePart }
 	local usable = {}
-	for _, node in all do
+	for _, node in MapService.getTaggedParts(Tags.PatrolNode) do
 		if CollectionService:HasTag(node, Tags.Crawlspace) and not canUseCrawlspaces then
 			continue
 		end
 		table.insert(usable, node)
 	end
 
-	if not zones or #zones == 0 then
-		return usable
-	end
-
-	local wanted: { [string]: boolean } = {}
-	for _, zone in zones do
-		wanted[zone] = true
-	end
-
-	local preferred = {}
-	for _, node in usable do
-		local zone = node:GetAttribute("Zone")
-		if type(zone) == "string" and wanted[zone] then
-			table.insert(preferred, node)
+	-- 1. The killer's own designed route.
+	if killerId then
+		local route = {}
+		for _, node in usable do
+			if node:GetAttribute("Killer") == killerId then
+				table.insert(route, node)
+			end
+		end
+		if #route >= 3 then
+			table.sort(route, function(a, b)
+				return ((a:GetAttribute("Order") :: number?) or 0) < ((b:GetAttribute("Order") :: number?) or 0)
+			end)
+			return route
 		end
 	end
 
-	-- A killer with two nodes can't meaningfully patrol; widen the net.
-	if #preferred >= 3 then
-		return preferred
+	-- 2. Rooms this killer favours.
+	if zones and #zones > 0 then
+		local wanted: { [string]: boolean } = {}
+		for _, zone in zones do
+			wanted[zone] = true
+		end
+
+		local preferred = {}
+		for _, node in usable do
+			local zone = node:GetAttribute("Zone")
+			if type(zone) == "string" and wanted[zone] then
+				table.insert(preferred, node)
+			end
+		end
+
+		-- A killer with two nodes can't meaningfully patrol; widen the net.
+		if #preferred >= 3 then
+			return preferred
+		end
 	end
+
+	-- 3. Anything at all.
 	return usable
 end
 

@@ -53,19 +53,24 @@ above the part. Invisible, `CanCollide = false` marker parts are ideal.
 
 | Tag | On | Attributes | What it does |
 |---|---|---|---|
-| `DH_PatrolNode` | Part | `Zone` (string) | A waypoint on a patrol route. **Need at least 4.** |
+| `DH_PatrolNode` | Part | `Killer`, `Order`, `Zone` | A waypoint on a patrol route. **Need at least 4.** |
 | `DH_Crawlspace` | Part | — | Add *alongside* `DH_PatrolNode`. Only Baby can use it. |
 
-`Zone` should match one of the strings in a killer's `PatrolZones` list in
-`src/shared/KillerData.luau` — `Kitchen`, `DiningRoom`, `Library`, `Attic`,
-`Cellar`, and so on. Each killer favours their own rooms, which is what makes
-Barbara feel like she lives in the kitchen and Robert like he lives in the
-library.
+`MapService.getPatrolNodes` resolves a killer's route in three tiers, best
+first:
 
-If a killer's zones don't exist on your map, they fall back to patrolling every
-node rather than standing still. So getting `Zone` wrong degrades the flavour,
-not the function. Three or more nodes in a killer's own zones is the threshold
-for them to use the preferred set.
+1. **A designed route** — nodes carrying `Killer = "Barbara"`, walked in
+   `Order`. This is what The House ships with: a hand-authored loop per killer,
+   transcribed from the mockup's `ROUTES` table. It's the reason Barbara really
+   does prowl the kitchen and Robert really does haunt the study.
+2. **Zone match** — nodes whose `Zone` is one of that killer's `PatrolZones` in
+   `src/shared/KillerData.luau` (`Kitchen`, `Library`, `Attic`, `Cellar`…).
+   Three or more is the threshold to use this set.
+3. **Everything** — so a map with bare untagged nodes still produces patrols
+   rather than killers standing still.
+
+Getting `Zone` wrong degrades flavour, not function. Omitting `Killer`
+everywhere just drops you to tier 2.
 
 ### Objectives
 
@@ -101,10 +106,11 @@ walked. The generated greybox has about 40.
 | `DH_NoisyTile` | Part | `Noise` (number) | Creaky floorboard. Steps on it spike your meter. |
 | `DH_Door` | Part | `Noise` (number) | Reserved for a door system; not wired up yet. |
 
-`Kind` is `Locker`, `Closet`, `Bed`, `Table`, or `Duct`. It changes the prompt
-text ("Hide in Locker", "Crawl into Duct") and nothing mechanical — all spots
-behave the same. Beds and tables should have `CanCollide = false` so players can
-walk under them; lockers and closets should be solid.
+`Kind` is `Locker`, `Closet`, `Bed`, `Table`, `Duct`, `Bathtub` or `Barrel`. It
+changes the prompt text ("Hide in Locker", "Crawl into Duct") and nothing
+mechanical — all spots behave the same. Beds, tables and bathtubs should have
+`CanCollide = false` so players can get into them; lockers, closets, ducts and
+barrels should be solid.
 
 `Noise` on a tile defaults to `Config.Noise.Actions.CreakyFloor` (12). Put tiles
 at chokepoints and around task locations — the design intent is that the fastest

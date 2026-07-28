@@ -232,7 +232,42 @@ house to pick someone up is a bigger ask than taking a bottle off a shelf.
 
 ---
 
-## 11. Not built yet
+## 11. Where the Three.js mockups overrode the PDFs
+
+A later set of mockups (`house.js`, `characters.js`, `props.js` and friends)
+arrived after the PDFs, authored directly in Roblox studs. Where they disagree
+with the design documents, **the mockups win** — they're the more recent
+statement of intent. Three cases:
+
+| | PDF said | Mockup says | Used |
+|---|---|---|---|
+| Baby's chase speed | "Very Fast" (read as 23) | 20 studs/s | **20** |
+| Baby's hearing | "Small" (read as 30) | 40 studs | **40** |
+| Safe zone duration | 15 / 20 / 30 | 30 seconds | **30** |
+
+The mockups also supplied things the PDFs never specified, which are now the
+source of truth in `src/server/Build/HouseData.luau`:
+
+- The House's real four-floor layout, room bounds and wall openings
+- All fifteen hiding spots, by type and position
+- Nine noisy floor patches with their exact footprints
+- Three safe zones, each with the three entrances the PDF asked for
+- Exactly 15 bottle, 14 cross and 5 mirror positions — matching the objective
+  goals precisely, so each objective now draws from its own designed pool
+- A hand-authored patrol loop per killer, replacing the zone-guessing heuristic
+
+Two things I changed from the mockup, both because a visual mockup doesn't have
+to be walkable and a game does:
+
+- **The cellar stair was turned.** As drawn it descended from the Cellar Stair
+  room and surfaced in the kitchen. It now runs -Z and arrives in the Boiler
+  Room.
+- **Stairwell openings were cut.** The mockup's floor slabs are solid, so the
+  grand stair, cellar stair and attic ladder all arrived into the underside of
+  the storey above. `HouseData.FloorHoles` now cuts three openings, and
+  `MapBuilder` subtracts them from the slabs.
+
+## 12. Not built yet
 
 - **The Yard, Menen's Lair, The Graveyard.** Listed as future maps in the
   document. They're in `Config.Maps` with `Enabled = false`, so they show in the

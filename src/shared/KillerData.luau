@@ -164,10 +164,12 @@ KillerData.Profiles = {
 		Title = "The Innocent Corrupted",
 		Role = "Killer",
 		MaxHealth = 430,
-		ChaseSpeed = 23, -- very fast, terrible ears
-		PatrolSpeed = 18,
-		HearingRange = 30,
-		HearingMultiplier = 30 / 45,
+		-- Stats from the characters.js mockup, which supersedes the PDF's
+		-- "Very Fast / Small detection" wording.
+		ChaseSpeed = 20,
+		PatrolSpeed = 17,
+		HearingRange = 40,
+		HearingMultiplier = 40 / 45,
 		Persistence = 0.7, -- loses interest quickly, then finds you again
 		SearchAggression = 1.4,
 		CanUseCrawlspaces = true,

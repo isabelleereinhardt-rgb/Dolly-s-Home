@@ -52,7 +52,10 @@ gets skipped. Nothing in the gameplay code changes.
 | Shop (stakes + consumables) | Basic | `src/server/Services/ShopService.luau` |
 | HUD, results screen, modals, spectating | Complete | `src/client/` |
 | Ava's graveyard dialogue | Written, waiting on the map | `src/server/Services/AvaService.luau` |
-| Greybox House map | Placeholder | `src/server/Build/MapBuilder.luau` |
+| **The House** — 4 floors, real layout | Built from the mockup | `src/server/Build/HouseData.luau` |
+| Designed patrol routes, one per killer | Complete | `HouseData.Routes` |
+| Furniture / dressing | Blocks at the right size | `MapBuilder.buildDressing` |
+| Character models | Placeholder rigs | `src/server/Build/RigBuilder.luau` |
 | The Yard / Menen's Lair / The Graveyard | Not built | — |
 | Sound | Wiring done, **ids blank** | `src/shared/Sounds.luau` |
 

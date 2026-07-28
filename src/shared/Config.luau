@@ -265,7 +265,9 @@ Config.Helpers = {
 	FirstAppearanceDelay = 60,
 	AppearanceGap = { Min = 70, Max = 130 },
 
-	SafeZoneDuration = 20, -- DOC: 15/20/30 appear across the docs; 20 used
+	-- DOC: the PDFs say 15, 20 and 30 in three different places. The
+	-- characters.js mockup settles it at 30, and is the most recent statement.
+	SafeZoneDuration = 30,
 	SafeZoneRadius = 18,
 	SafeZoneKillerRepelRadius = 24,
 
