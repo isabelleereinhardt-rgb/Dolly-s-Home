@@ -22,6 +22,38 @@ it a name.
 
 ---
 
+## Connecting Claude Code to your Studio
+
+The repo ships a **`.mcp.json`** at its root holding the Roblox Studio MCP
+config. Claude Code reads that file at session start, so a session started
+inside this folder connects to your open Studio automatically.
+
+This only works from Claude Code **running on your own PC** — the config
+launches `cmd.exe` locally, so it needs to be on the machine Studio is on. A
+cloud session (claude.ai/code) can't use it.
+
+Setting it up on Windows:
+
+1. In Studio: **Assistant → ⋯ → Manage MCP Servers → Enable Studio as MCP
+   server**.
+2. Download or clone this repo to your PC.
+3. Open a terminal in that folder and run `claude`.
+4. Approve the `Roblox_Studio` server when it asks.
+5. Type `/mcp` to confirm it's connected.
+
+Once connected, Claude can read your data model, run Luau in Studio, start
+playtests and read the Output back. Useful things to ask it:
+
+- "Run `MapService.validate()` and tell me which tags my map is missing."
+- "List everything under Workspace and ServerStorage."
+- "Start a playtest and tell me what the Output says."
+
+The config is Windows-specific. On macOS the command is
+`/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP` with no arguments —
+swap that into `.mcp.json` if you move machines.
+
+---
+
 ## The other way: add it to a place you already have
 
 Three drag-and-drop files. Use these if you have existing work you want to keep.
